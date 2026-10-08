@@ -14,6 +14,17 @@
 - 选择保存在插件的 `tern.kv` 中，所有窗口共享，插件重载或 Tern 重启后保留；切换命令不要求当前 pane 位于 Git 仓库内。
 - 系统默认浏览器通过系统 URL opener 打开：macOS 使用 `open`，Linux 使用 `xdg-open`，Windows 使用 `explorer.exe`。启动失败时显示错误，不自动退回内置浏览器。
 
+## 快捷键
+
+| 命令 | 默认快捷键 |
+| --- | --- |
+| `Git Open: Open in GitHub` | 先按 `Ctrl+B`，松开后按 `G`（`ctrl+b>g`） |
+| `Git Open: Toggle Browser` | 无默认快捷键；可在用户 `keybinds` 中绑定 |
+
+快捷键通过命令的 `keys` 字段注册，复用原有处理逻辑。Tern 默认快捷键或键盘预设占用的组合不会被插件覆盖；用户可在 `settings.json` 的 `keybinds` 中覆盖插件快捷键，action ID 分别为 `plugin.git-open.open` 和 `plugin.git-open.toggle-browser`。
+
+打开仓库使用 `Ctrl+B` 前缀，无需另行注册前缀键。如果默认键位或键盘预设已将 `Ctrl+B` 绑定为独立动作，该插件序列会被忽略；如果它是预设的序列前缀，则可以添加尚未占用的后续键。切换浏览器保留命令和 action，但不注册默认快捷键。
+
 ## 安装与开发
 
 ```sh

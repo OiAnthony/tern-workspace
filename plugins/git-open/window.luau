@@ -93,6 +93,7 @@ tern.command({
 	title = "Git Open: Open in GitHub",
 	icon = "link",
 	group = "Git",
+	keys = { "ctrl+b>g" },
 	available = function()
 		return is_repository
 	end,
