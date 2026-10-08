@@ -1,0 +1,6 @@
+schema = 1
+id = "basic"
+name = "Basic Tern Plugin"
+version = "0.1.0"
+description = "Minimal window-side Tern plugin template."
+window = "window.luau"
