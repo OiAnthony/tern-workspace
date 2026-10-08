@@ -1,0 +1,6 @@
+schema = 1
+id = "git-open"
+name = "Git Open"
+version = "0.1.0"
+description = "Open the current Git repository in its remote web page."
+window = "window.luau"
