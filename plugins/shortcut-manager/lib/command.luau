@@ -3,7 +3,7 @@
 local command = {}
 
 local function shell_mode_error(token: string): string
-	return "检测到 shell 语法 " .. token .. "；统一命令模式不会执行 shell 语法，请切换到 Shell 模式"
+	return "检测到 Shell 语法 " .. token .. "；请选择命令解释中的「通过 Shell」"
 end
 
 function command.parse(text: string): (string?, { string }?, string?)

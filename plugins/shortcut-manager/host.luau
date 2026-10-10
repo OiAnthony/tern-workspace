@@ -22,7 +22,7 @@ local function text(state: State, name: string): string
 	if name == "launch" then return state.launch end
 	if name == "chord" and state.recording then return table.concat(state.recorded, ">") end
 	if name == "launch_kind" then
-		return if state.draft and state.draft.kind == "tern" then "tern" elseif state.draft and state.draft.shell then "shell" else "process"
+		return if state.draft and state.draft.kind == "tern" then "tern" else "process"
 	end
 	local d = state.draft
 	if d == nil then return "" end
@@ -66,15 +66,21 @@ local function set_field(state: State, name: string, value: string): ()
 	if d == nil then return end
 	if name == "launch" then
 		state.launch = value
-		local program, args, err = command.parse(value)
-		state.input_error = err
-		if program ~= nil and args ~= nil then d.program, d.args = program, tern.json.array(args) :: { string } end
+		if d.shell then
+			d.command, state.input_error = value, nil
+		else
+			local program, args, err = command.parse(value)
+			state.input_error = err
+			if program ~= nil and args ~= nil then d.program, d.args = program, tern.json.array(args) :: { string } end
+		end
+	elseif name == "shell" then
+		d.shell = value == "true"
+		set_field(state, "launch", state.launch)
 	elseif name == "launch_kind" then
-		if value == "shell" and d.command == "" then d.command = state.launch end
-		d.kind, d.shell = if value == "tern" then "tern" else "process", value == "shell"
+		d.kind = value
 		state.inspection = nil
 	elseif name == "mode" then d.mode = value; if value == "background" then d.reuse = false end
-	elseif name == "enabled" or name == "shell" or name == "focus" or name == "reuse" then (d :: any)[name] = value == "true"
+	elseif name == "enabled" or name == "focus" or name == "reuse" then (d :: any)[name] = value == "true"
 	else (d :: any)[name] = value end
 	if d.mode == "float" and d.corner == "fullscreen" then d.focus = true end
 	state.dirty, state.error = true, nil
@@ -85,7 +91,7 @@ local function show_action(state: State, id: string): ()
 			state.selected, state.draft, state.delete_id = id, model.clone(a), nil
 			state.is_new, state.dirty, state.error, state.inspection, state.confirm_delete = false, false, nil, nil, false
 			state.field, state.cursor, state.anchor = "title", input.units(a.title), nil
-			state.launch, state.input_error = command.format(a.program, a.args), nil
+			state.launch, state.input_error = if a.shell then a.command else command.format(a.program, a.args), nil
 			state.recording, state.recorded = false, {}
 			state.focus_ready = false
 			return
@@ -103,7 +109,7 @@ local function new_action(state: State, preset: string?): ()
 	end
 	state.draft, state.selected, state.delete_id, state.is_new, state.dirty = a, nil, nil, true, true
 	state.error, state.status, state.inspection, state.confirm_delete = nil, "", nil, false
-	state.launch, state.input_error = command.format(a.program, a.args), nil
+	state.launch, state.input_error = if a.shell then a.command else command.format(a.program, a.args), nil
 	state.recording, state.recorded = false, {}
 	state.focus_ready = false
 	state.field, state.cursor, state.anchor = "title", input.units(a.title), nil
@@ -128,7 +134,8 @@ end
 local function choice_label(name: string, value: string): string
 	local labels = {
 		enabled = { ["true"] = "启用", ["false"] = "停用" },
-		launch_kind = { process = "运行程序", shell = "Shell 命令", tern = "Tern 动作" },
+		launch_kind = { process = "运行命令", tern = "Tern 动作" },
+		shell = { ["false"] = "直接执行", ["true"] = "通过 Shell" },
 		mode = { background = "后台进程", pane = "分屏终端", tab = "新标签页", float = "浮动终端" },
 		cwd_mode = { source = "跟随当前目录", fixed = "指定目录" }, focus = { ["true"] = "切换到终端", ["false"] = "保持当前焦点" },
 		reuse = { ["true"] = "复用已有终端", ["false"] = "每次新建终端" }, direction = { right = "右侧", down = "下方", left = "左侧", up = "上方" },
@@ -180,6 +187,7 @@ local function preview(state: State, d: Action): any
 	local launch = if d.kind == "tern" then d.tern_action elseif d.shell then d.command else state.launch
 	local cwd = if d.cwd_mode == "fixed" then d.cwd else state.source_cwd
 	local description = if d.kind == "tern" then "运行 Tern 原生动作" else choice_label("mode", d.mode) .. " · " .. (if cwd == "" then "没有目标目录" else cwd)
+	if d.kind == "process" then description ..= " · " .. choice_label("shell", tostring(d.shell)) end
 	if d.kind == "process" and d.mode ~= "background" then description ..= " · " .. choice_label("focus", tostring(d.focus)) .. " · " .. choice_label("reuse", tostring(d.reuse)) end
 	local content = { ui.el("div", { class = "sm-label", text = "执行预览 · 不会自动运行" }),
 		ui.el("div", { class = "sm-preview-command", text = if launch == "" then "填写命令后，这里显示执行内容" else launch }),
@@ -224,15 +232,12 @@ local function editor(state: State): any
 		}) }
 	if state.recording then table.insert(items, ui.el("div", { class = "sm-warning", text = "依次按键可录制序列。Enter 完成，Esc 取消。系统或 Tern 保留的按键可在快捷键输入框手填。" })) end
 	table.insert(items, ui.el("div", { key = "shortcut", class = "sm-shortcut" }, shortcut))
-	table.insert(items, choices(state, "launch_kind", "执行方式", { "process", "shell", "tern" }))
+	table.insert(items, choices(state, "launch_kind", "动作类型", { "process", "tern" }))
 	if d.kind == "process" then
-		if d.shell then
-			table.insert(items, text_field(state, "command", "Shell 命令", true, "例如 git status | head"))
-			table.insert(items, ui.el("div", { class = "sm-warning", text = "通过 Shell 执行，支持变量与管道。仅使用可信命令。" }))
-		else
-			table.insert(items, text_field(state, "launch", "运行命令", true, "例如 code . 或 git status --short"))
-			table.insert(items, ui.el("div", { class = if state.input_error then "sm-error" else "sm-muted", text = state.input_error or "像终端一样输入程序和参数；路径含空格时加引号。不展开变量与通配符。" }))
-		end
+		table.insert(items, text_field(state, "launch", "运行命令", true, "例如 code . 或 git status --short"))
+		table.insert(items, choices(state, "shell", "命令解释", { "false", "true" }))
+		table.insert(items, ui.el("div", { class = if d.shell then "sm-warning" elseif state.input_error then "sm-error" else "sm-muted",
+			text = if d.shell then "通过登录 Shell 执行，支持变量、管道与重定向。仅使用可信命令。" else state.input_error or "直接传入程序和参数；路径含空格时加引号。需要变量、管道或重定向时，选择通过 Shell。" }))
 	else
 		table.insert(items, link("浏览 Tern 动作", href .. "inspect-actions", nil, state.field == "button-inspect"))
 		if type(state.inspection) == "table" and state.inspection.actions ~= nil then table.insert(items, text_field(state, "action_search", "搜索 Tern 动作", false, "名称或 ID")) end
@@ -334,7 +339,7 @@ local function init(cx: BlockCx, args: { string }, saved: any): State
 		field = if type(snap) == "table" and type(snap.field) == "string" then snap.field else "title",
 		cursor = if type(snap) == "table" and type(snap.cursor) == "number" then snap.cursor else 0,
 		anchor = if type(snap) == "table" and type(snap.anchor) == "number" then snap.anchor else nil, focus_ready = false,
-		launch = if type(snap) == "table" and type(snap.launch) == "string" then snap.launch elseif draft then command.format(draft.program, draft.args) else "",
+		launch = if type(snap) == "table" and type(snap.launch) == "string" then snap.launch elseif draft then (if draft.shell then draft.command else command.format(draft.program, draft.args)) else "",
 		input_error = if type(snap) == "table" and type(snap.input_error) == "string" then snap.input_error else nil,
 		recording = false, recorded = {}, action_search = "" }
 end
@@ -360,7 +365,7 @@ local function invoke(state: State, name: string): ()
 		state.delete_id = nil
 		if state.is_new then state.draft, state.selected, state.is_new = nil, nil, false elseif state.selected then for _, a in state.config.actions do if a.id == state.selected then state.draft = model.clone(a); break end end end
 		state.dirty, state.error, state.status, state.confirm_delete = false, nil, "已放弃本地修改。", false
-		state.launch = if state.draft then command.format(state.draft.program, state.draft.args) else ""
+		state.launch = if state.draft then (if state.draft.shell then state.draft.command else command.format(state.draft.program, state.draft.args)) else ""
 		state.input_error, state.recording = nil, false
 		state.field, state.focus_ready = "title", false
 	elseif name == "reload" then
@@ -384,7 +389,7 @@ local function order(state: State): { string }
 	else
 		for _, name in { "button-cancel", "button-save" } do table.insert(names, name) end
 		for _, name in { "title", "choice-enabled", "chord", "button-record", "button-clear-chord", "choice-launch_kind" } do table.insert(names, name) end
-		if d.kind == "process" then table.insert(names, if d.shell then "command" else "launch")
+		if d.kind == "process" then table.insert(names, "launch"); table.insert(names, "choice-shell")
 		else
 			table.insert(names, "button-inspect")
 			if type(state.inspection) == "table" and state.inspection.actions ~= nil then
@@ -419,7 +424,7 @@ local function continue_pending(state: State): ()
 	if state.draft == nil and state.dirty then state.config = model.load(); state.baseline = state.config.revision end
 	state.delete_id = nil
 	if state.is_new then state.draft, state.selected, state.is_new = nil, nil, false elseif state.selected then for _, a in state.config.actions do if a.id == state.selected then state.draft = model.clone(a); break end end end
-	state.launch = if state.draft then command.format(state.draft.program, state.draft.args) else ""
+	state.launch = if state.draft then (if state.draft.shell then state.draft.command else command.format(state.draft.program, state.draft.args)) else ""
 	state.input_error, state.recording = nil, false
 	state.dirty = false
 	if pending == "new" then new_action(state, nil) elseif pending == "preset" then new_action(state, preset) elseif pending then show_action(state, pending) end
@@ -467,7 +472,8 @@ local function key(state: State, k: Key, cx: BlockCx): boolean?
 	end
 	if string.sub(state.field, 1, 7) == "choice-" then
 		local name = string.sub(state.field, 8)
-		local values = if name == "launch_kind" then { "process", "shell", "tern" } elseif name == "focus" and state.draft and state.draft.mode == "float" and state.draft.corner == "fullscreen" then { "true" }
+		local values = if name == "launch_kind" then { "process", "tern" } elseif name == "focus" and state.draft and state.draft.mode == "float" and state.draft.corner == "fullscreen" then { "true" }
+			elseif name == "shell" then { "false", "true" }
 			elseif name == "enabled" or name == "focus" or name == "reuse" then { "true", "false" }
 			elseif name == "mode" then { "background", "pane", "tab", "float" } elseif name == "cwd_mode" then { "source", "fixed" }
 			elseif name == "direction" then { "left", "right", "up", "down" } else { "tl", "tr", "bl", "br", "fullscreen" }
@@ -476,7 +482,7 @@ local function key(state: State, k: Key, cx: BlockCx): boolean?
 		return false
 	end
 	local previous = text(state, state.field)
-	local updated, cursor, anchor, handled = input.apply(previous, state.cursor, state.anchor, k, state.field == "launch" or state.field == "command")
+	local updated, cursor, anchor, handled = input.apply(previous, state.cursor, state.anchor, k, state.field == "launch")
 	if not handled then return false end
 	state.cursor, state.anchor = cursor, anchor
 	if updated ~= previous then set_field(state, state.field, updated) end

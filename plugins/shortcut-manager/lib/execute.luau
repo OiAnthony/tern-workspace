@@ -264,7 +264,21 @@ local function place_float(action: model.Action, cx: WindowCx, pane: number, ove
 			pending_expansion[pane] = tern.timer(0, function(timer_cx)
 				pending_expansion[pane] = nil
 				if timer_cx == nil or timer_cx.session:focused() ~= pane or timer_cx.session:pane(pane) == nil then return end
-				local expanded, expand_error = pcall(function() timer_cx:command("zoom") end)
+				local expanded, expand_error = pcall(function()
+					-- Layout exposes no PiP mode; its native header names the available transition.
+					local view = timer_cx.session:view(pane, { depth = 2, nodes = 32 })
+					if type(view) == "table" and view.children ~= nil then
+						for _, header in view.children do
+							if header.role ~= "SectionHeader" or header.children == nil then continue end
+							for _, control in header.children do
+								if control.role ~= "Button" then continue end
+								if control.name == "Restore picture in picture" then return true end
+								if control.name == "Expand picture in picture" then timer_cx:command("zoom"); return true end
+							end
+						end
+					end
+					error("Tern did not expose the floating pane expansion control")
+				end)
 				if not expanded then timer_cx:toast("error", action.title, "Could not expand floating pane: " .. tostring(expand_error)) end
 			end)
 		end
