@@ -1,0 +1,12 @@
+schema = 1
+id = "shortcut-manager"
+name = "Shortcut Manager"
+version = "0.1.0"
+description = "Manage custom shortcuts for commands, terminal panes, tabs and PiP."
+host = "host.luau"
+window = "window.luau"
+styles = ["styles.css"]
+
+[[blocks]]
+id = "manager"
+title = "Shortcut Manager"

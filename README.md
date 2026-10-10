@@ -36,6 +36,11 @@
 5. **Host / Window 边界显式化**：不要为了复用而把两个入口强行合并。插件 README 应注明使用了哪个半部以及原因。
 6. **每个插件都可单独 link**：开发时使用 `tern plugin link plugins/<plugin-id>`，不依赖整个工作区被 Tern 当成一个 package。
 
+## 当前插件
+
+- [`git-open`](plugins/git-open/README.md)：打开当前 Git 项目的远程页面。
+- [`shortcut-manager`](plugins/shortcut-manager/README.md)：在原生面板管理自定义快捷动作，支持后台进程、分屏、标签页和 PiP。
+
 ## 新插件流程
 
 ```sh
