@@ -40,6 +40,7 @@
 
 - [`git-open`](plugins/git-open/README.md)：打开当前 Git 项目的远程页面。
 - [`shortcut-manager`](plugins/shortcut-manager/README.md)：在原生面板管理自定义快捷动作，支持后台进程、分屏、标签页和 PiP。
+- [`auto-tab-groups`](plugins/auto-tab-groups/README.md)：按工作目录和 Git 仓库自动分组，在左侧按项目导航全部 panes，与原生 Files / Git 区域并排。
 
 ## 新插件流程
 

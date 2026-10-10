@@ -130,7 +130,7 @@ There is currently no documented build command, package-manager command, lint wr
 
 ## Testing & QA
 
-There are currently no test files, test runner, coverage configuration, CI workflow, or automated QA scripts. No test naming convention is established.
+There is no workspace-wide test runner. `auto-tab-groups` has standalone Luau consumer regressions (`luau plugins/auto-tab-groups/tests/grouping.luau`) and an isolated native sidebar regression (`bash plugins/auto-tab-groups/tests/sidebar.sh`, requires Tern and jq). Its README documents static analysis and native-runtime acceptance checks.
 
 For a new or changed plugin, use the documented risk-based checks:
 
@@ -142,4 +142,4 @@ For a new or changed plugin, use the documented risk-based checks:
 6. Check toast/log output for handler failures.
 7. Update the plugin README with purpose, Host/Window choice, link/install command, external commands, and permissions.
 
-A plugin-local `tests/` directory is allowed for fixtures or executable checks, but no execution convention exists yet. If automated testing is introduced, document its runner and command here rather than silently adding a new convention.
+A plugin-local `tests/` directory may contain fixtures or executable checks. Document each plugin's runner and command in its README; do not introduce an implicit workspace-level runner.
