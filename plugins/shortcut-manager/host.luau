@@ -12,7 +12,7 @@ type State = {
 	selected: string?, draft: Action?, delete_id: string?, is_new: boolean, dirty: boolean, search: string,
 	status: string, error: string?, inspection: any, confirm_delete: boolean, confirm_discard: boolean,
 	pending: string?, pending_preset: string?, field: string, cursor: number, anchor: number?, focus_ready: boolean,
-	launch: string, input_error: string?, advanced: boolean, recording: boolean, recorded: { string }, action_search: string,
+	launch: string, input_error: string?, recording: boolean, recorded: { string }, action_search: string,
 }
 type Key = { name: string, text: string?, ctrl: boolean, alt: boolean, shift: boolean, meta: boolean }
 
@@ -20,6 +20,7 @@ local function text(state: State, name: string): string
 	if name == "search" then return state.search end
 	if name == "action_search" then return state.action_search end
 	if name == "launch" then return state.launch end
+	if name == "chord" and state.recording then return table.concat(state.recorded, ">") end
 	if name == "launch_kind" then
 		return if state.draft and state.draft.kind == "tern" then "tern" elseif state.draft and state.draft.shell then "shell" else "process"
 	end
@@ -34,7 +35,7 @@ local function snapshot(state: State): any
 		action = state.draft, delete_id = state.delete_id, source = state.source_id, source_cwd = state.source_cwd,
 		draft = state.draft, actions = state.config.actions, is_new = state.is_new, dirty = state.dirty,
 		search = state.search, field = state.field, cursor = state.cursor, anchor = state.anchor, status = state.status,
-		launch = state.launch, input_error = state.input_error, advanced = state.advanced }
+		launch = state.launch, input_error = state.input_error }
 end
 local function persist(state: State): () tern.kv.set("draft:" .. state.token, snapshot(state)) end
 local function focus(state: State, name: string, cx: BlockCx): ()
@@ -42,6 +43,7 @@ local function focus(state: State, name: string, cx: BlockCx): ()
 	local root = "main.1.1." .. (if state.draft ~= nil and not state.confirm_discard then "body." else "")
 	local id = root .. "wrap-" .. name .. ".field-" .. name
 	if name == "search" then id = "main.1.0.0.search"
+	elseif name == "chord" then id = root .. "shortcut.value.wrap-chord.field-chord"
 	elseif name:sub(1, 7) == "choice-" then
 		local field = name:sub(8)
 		id = root .. "wrap-choice-" .. field .. ".options." .. field .. "-" .. text(state, field)
@@ -74,6 +76,7 @@ local function set_field(state: State, name: string, value: string): ()
 	elseif name == "mode" then d.mode = value; if value == "background" then d.reuse = false end
 	elseif name == "enabled" or name == "shell" or name == "focus" or name == "reuse" then (d :: any)[name] = value == "true"
 	else (d :: any)[name] = value end
+	if d.mode == "float" and d.corner == "fullscreen" then d.focus = true end
 	state.dirty, state.error = true, nil
 end
 local function show_action(state: State, id: string): ()
@@ -83,7 +86,7 @@ local function show_action(state: State, id: string): ()
 			state.is_new, state.dirty, state.error, state.inspection, state.confirm_delete = false, false, nil, nil, false
 			state.field, state.cursor, state.anchor = "title", input.units(a.title), nil
 			state.launch, state.input_error = command.format(a.program, a.args), nil
-			state.advanced, state.recording, state.recorded = true, false, {}
+			state.recording, state.recorded = false, {}
 			state.focus_ready = false
 			return
 		end
@@ -101,7 +104,7 @@ local function new_action(state: State, preset: string?): ()
 	state.draft, state.selected, state.delete_id, state.is_new, state.dirty = a, nil, nil, true, true
 	state.error, state.status, state.inspection, state.confirm_delete = nil, "", nil, false
 	state.launch, state.input_error = command.format(a.program, a.args), nil
-	state.advanced, state.recording, state.recorded = true, false, {}
+	state.recording, state.recorded = false, {}
 	state.focus_ready = false
 	state.field, state.cursor, state.anchor = "title", input.units(a.title), nil
 end
@@ -129,7 +132,7 @@ local function choice_label(name: string, value: string): string
 		mode = { background = "后台进程", pane = "分屏终端", tab = "新标签页", float = "浮动终端" },
 		cwd_mode = { source = "跟随当前目录", fixed = "指定目录" }, focus = { ["true"] = "切换到终端", ["false"] = "保持当前焦点" },
 		reuse = { ["true"] = "复用已有终端", ["false"] = "每次新建终端" }, direction = { right = "右侧", down = "下方", left = "左侧", up = "上方" },
-		corner = { tl = "左上", tr = "右上", bl = "左下", br = "右下" },
+		corner = { tl = "左上", tr = "右上", bl = "左下", br = "右下", fullscreen = "全屏" },
 	}
 	return if labels[name] and labels[name][value] then labels[name][value] else value
 end
@@ -184,6 +187,7 @@ local function preview(state: State, d: Action): any
 	if not d.enabled then table.insert(content, ui.el("div", { class = "sm-warning", text = "已停用：保存后不注册快捷键与命令面板动作。" })) end
 	if d.kind == "process" and (d.mode == "pane" or d.mode == "float") then
 		local panes = { ui.el("div", { class = "sm-mini-pane", text = "当前面板" }), ui.el("div", { class = "sm-mini-pane target", text = if d.mode == "pane" then choice_label("direction", d.direction) .. "新终端" else choice_label("corner", d.corner) .. "浮窗" }) }
+		if d.mode == "float" and d.corner == "fullscreen" then table.remove(panes, 1) end
 		if d.mode == "pane" and (d.direction == "left" or d.direction == "up") then panes[1], panes[2] = panes[2], panes[1] end
 		table.insert(content, ui.el("div", { class = "sm-layout-preview " .. (if d.mode == "pane" and (d.direction == "up" or d.direction == "down") then "vertical" elseif d.mode == "float" then "float-" .. d.corner else "horizontal") }, panes))
 	end
@@ -210,17 +214,17 @@ local function editor(state: State): any
 		return ui.el("div", { class = "sm-editor" }, items)
 	end
 	table.insert(items, text_field(state, "title", "名称", false, "例如：打开项目编辑器"))
-	local chord = if state.recording then table.concat(state.recorded, ">") else d.chord
+	table.insert(items, choices(state, "enabled", "动作状态", { "true", "false" }))
 	local shortcut = { ui.el("div", { key = "value", class = "sm-shortcut-value" }, {
-		ui.el("div", { class = "sm-label", text = "快捷键" }),
-		if chord == "" then ui.el("div", { class = "sm-muted", text = if state.recording then "现在按下快捷键…" else "未绑定" }) else keycaps(chord),
+		text_field(state, "chord", "快捷键", false, if state.recording then "现在按下快捷键…" else "ctrl+b>g · > 表示依次按键"),
 	}),
 		ui.el("div", { key = "options", class = "sm-options" }, {
 			button(if state.recording then "完成录制" else "录制按键", if state.recording then "record-done" else "record", "sm-button", state.field == "button-record"),
 			button(if state.recording then "取消录制" else "清除绑定", if state.recording then "record-cancel" else "clear-chord", nil, state.field == "button-clear-chord"),
 		}) }
-	if state.recording then table.insert(items, ui.el("div", { class = "sm-warning", text = "依次按键可录制序列。Enter 完成，Esc 取消。系统或 Tern 保留的按键请在高级参数手填。" })) end
+	if state.recording then table.insert(items, ui.el("div", { class = "sm-warning", text = "依次按键可录制序列。Enter 完成，Esc 取消。系统或 Tern 保留的按键可在快捷键输入框手填。" })) end
 	table.insert(items, ui.el("div", { key = "shortcut", class = "sm-shortcut" }, shortcut))
+	table.insert(items, choices(state, "launch_kind", "执行方式", { "process", "shell", "tern" }))
 	if d.kind == "process" then
 		if d.shell then
 			table.insert(items, text_field(state, "command", "Shell 命令", true, "例如 git status | head"))
@@ -241,29 +245,27 @@ local function editor(state: State): any
 		if type(state.inspection) == "table" and state.inspection.actions ~= nil then
 			table.insert(items, ui.el("div", { key = "catalog", class = "sm-catalog" }, if #catalog == 0 then { ui.el("div", { class = "sm-muted", text = "没有匹配的动作。试试其他名称或 ID。" }) } else catalog))
 		end
+		table.insert(items, text_field(state, "tern_action", "手动 Tern 动作 ID", false, "例如 new_tab"))
 	end
-	table.insert(items, ui.el("button", { key = "button-advanced", class = "sm-button sm-advanced" .. (if state.field == "button-advanced" then " keyboard" else ""), text = if state.advanced then "收起高级参数" else "高级参数 · 执行方式、目录与行为", actions = { click = "advanced" }, attrs = { ["aria-expanded"] = state.advanced } }))
-	if state.advanced then
-		table.insert(items, choices(state, "launch_kind", "执行方式", { "process", "shell", "tern" }))
-		table.insert(items, text_field(state, "chord", "手动快捷键", false, "ctrl+b>g · > 表示依次按键"))
-		table.insert(items, choices(state, "enabled", "动作状态", { "true", "false" }))
-		if d.kind == "process" then
-			table.insert(items, choices(state, "mode", "在哪里运行", { "background", "pane", "tab", "float" }))
-			table.insert(items, choices(state, "cwd_mode", "工作目录", { "source", "fixed" }))
-			if d.cwd_mode == "fixed" then table.insert(items, text_field(state, "cwd", "目录绝对路径", false, "/Users/me/project")) end
-			if d.mode ~= "background" then
-				table.insert(items, choices(state, "focus", "启动后", { "true", "false" }))
-				table.insert(items, choices(state, "reuse", "重复触发时", { "true", "false" }))
-			end
-			if d.mode == "pane" then table.insert(items, choices(state, "direction", "分屏方向", { "left", "right", "up", "down" })) end
-			if d.mode == "float" then table.insert(items, choices(state, "corner", "浮窗位置", { "tl", "tr", "bl", "br" })) end
+	table.insert(items, ui.el("div", { key = "advanced-divider", class = "sm-divider", text = "高级参数", attrs = { role = "separator" } }))
+	if d.kind == "process" then
+		table.insert(items, choices(state, "mode", "在哪里运行", { "background", "pane", "tab", "float" }))
+		if d.mode == "pane" then table.insert(items, choices(state, "direction", "分屏方向", { "left", "right", "up", "down" })) end
+		if d.mode == "float" then
+			table.insert(items, choices(state, "corner", "浮窗位置", { "tl", "tr", "bl", "br", "fullscreen" }))
+			if d.corner == "fullscreen" then table.insert(items, ui.el("div", { class = "sm-muted", text = "填满浮窗所在区域，不进入系统全屏。全屏时切换到终端；离开焦点后恢复普通浮窗。" })) end
 		end
-		if d.kind == "tern" then table.insert(items, text_field(state, "tern_action", "手动 Tern 动作 ID", false, "例如 new_tab")) end
-		table.insert(items, ui.el("div", { class = "sm-muted", text = "内部 ID：" .. d.id .. " · 自动生成，保存后保持不变" }))
-		table.insert(items, preview(state, d))
-		table.insert(items, link("试运行", href .. "try", nil, state.field == "button-try"))
-		if not state.is_new then table.insert(items, button(if state.confirm_delete then "确认删除" else "删除动作", "delete", "sm-button danger", state.field == "button-delete")) end
+		if d.mode ~= "background" then
+			table.insert(items, choices(state, "focus", "启动后", if d.mode == "float" and d.corner == "fullscreen" then { "true" } else { "true", "false" }))
+			table.insert(items, choices(state, "reuse", "重复触发时", { "true", "false" }))
+		end
+		table.insert(items, choices(state, "cwd_mode", "工作目录", { "source", "fixed" }))
+		if d.cwd_mode == "fixed" then table.insert(items, text_field(state, "cwd", "目录绝对路径", false, "/Users/me/project")) end
 	end
+	table.insert(items, ui.el("div", { class = "sm-muted", text = "内部 ID：" .. d.id .. " · 自动生成，保存后保持不变" }))
+	table.insert(items, preview(state, d))
+	table.insert(items, link("试运行", href .. "try", "sm-button sm-fit", state.field == "button-try"))
+	if not state.is_new then table.insert(items, button(if state.confirm_delete then "确认删除" else "删除动作", "delete", "sm-button danger sm-fit", state.field == "button-delete")) end
 	feedback(state, items)
 	if state.confirm_delete then table.insert(items, ui.el("div", { class = "sm-warning", text = "再次确认才标记删除，随后保存才会生效。不终止已启动程序。" })) end
 	if state.error and type(state.inspection) == "table" and state.inspection.status == "conflict" then table.insert(items, link("确认替换冲突快捷键并保存", href .. "replace-save", "sm-button danger", state.field == "button-replace")) end
@@ -334,7 +336,7 @@ local function init(cx: BlockCx, args: { string }, saved: any): State
 		anchor = if type(snap) == "table" and type(snap.anchor) == "number" then snap.anchor else nil, focus_ready = false,
 		launch = if type(snap) == "table" and type(snap.launch) == "string" then snap.launch elseif draft then command.format(draft.program, draft.args) else "",
 		input_error = if type(snap) == "table" and type(snap.input_error) == "string" then snap.input_error else nil,
-		advanced = not (type(snap) == "table" and snap.advanced == false), recording = false, recorded = {}, action_search = "" }
+		recording = false, recorded = {}, action_search = "" }
 end
 local function delete_action(state: State): ()
 	if state.draft == nil or state.is_new or state.selected == nil then return end
@@ -346,7 +348,6 @@ local function delete_action(state: State): ()
 end
 local function invoke(state: State, name: string): ()
 	if name == "delete" then delete_action(state)
-	elseif name == "advanced" then state.advanced, state.field = not state.advanced, "button-advanced"
 	elseif name == "record" then
 		if state.draft then state.recording, state.recorded, state.field = true, {}, "button-record" end
 	elseif name == "record-done" then
@@ -382,7 +383,7 @@ local function order(state: State): { string }
 		else for _, preset in { "vscode", "zed", "idea", "lazygit", "lazydocker" } do table.insert(names, "button-preset-" .. preset) end end
 	else
 		for _, name in { "button-cancel", "button-save" } do table.insert(names, name) end
-		for _, name in { "title", "button-record", "button-clear-chord" } do table.insert(names, name) end
+		for _, name in { "title", "choice-enabled", "chord", "button-record", "button-clear-chord", "choice-launch_kind" } do table.insert(names, name) end
 		if d.kind == "process" then table.insert(names, if d.shell then "command" else "launch")
 		else
 			table.insert(names, "button-inspect")
@@ -392,22 +393,17 @@ local function order(state: State): { string }
 					if state.action_search == "" or (tostring(a.title or "") .. " " .. a.id):lower():find(state.action_search:lower(), 1, true) then table.insert(names, "button-native-" .. a.id) end
 				end
 			end
+			table.insert(names, "tern_action")
 		end
-		table.insert(names, "button-advanced")
-		if state.advanced then
-			table.insert(names, "choice-launch_kind")
-			table.insert(names, "chord"); table.insert(names, "choice-enabled")
-			if d.kind == "process" then
-				table.insert(names, "choice-mode")
-				table.insert(names, "choice-cwd_mode"); if d.cwd_mode == "fixed" then table.insert(names, "cwd") end
-				if d.mode ~= "background" then table.insert(names, "choice-focus"); table.insert(names, "choice-reuse") end
-				if d.mode == "pane" then table.insert(names, "choice-direction") end
-				if d.mode == "float" then table.insert(names, "choice-corner") end
-			end
-			if d.kind == "tern" then table.insert(names, "tern_action") end
-			table.insert(names, "button-try")
-			if not state.is_new then table.insert(names, "button-delete") end
+		if d.kind == "process" then
+			table.insert(names, "choice-mode")
+			if d.mode == "pane" then table.insert(names, "choice-direction") end
+			if d.mode == "float" then table.insert(names, "choice-corner") end
+			if d.mode ~= "background" then table.insert(names, "choice-focus"); table.insert(names, "choice-reuse") end
+			table.insert(names, "choice-cwd_mode"); if d.cwd_mode == "fixed" then table.insert(names, "cwd") end
 		end
+		table.insert(names, "button-try")
+		if not state.is_new then table.insert(names, "button-delete") end
 		if state.error and type(state.inspection) == "table" and state.inspection.status == "conflict" then table.insert(names, "button-replace") end
 	end
 	if state.error then table.insert(names, "button-reload") end
@@ -471,9 +467,10 @@ local function key(state: State, k: Key, cx: BlockCx): boolean?
 	end
 	if string.sub(state.field, 1, 7) == "choice-" then
 		local name = string.sub(state.field, 8)
-		local values = if name == "launch_kind" then { "process", "shell", "tern" } elseif name == "enabled" or name == "focus" or name == "reuse" then { "true", "false" }
+		local values = if name == "launch_kind" then { "process", "shell", "tern" } elseif name == "focus" and state.draft and state.draft.mode == "float" and state.draft.corner == "fullscreen" then { "true" }
+			elseif name == "enabled" or name == "focus" or name == "reuse" then { "true", "false" }
 			elseif name == "mode" then { "background", "pane", "tab", "float" } elseif name == "cwd_mode" then { "source", "fixed" }
-			elseif name == "direction" then { "left", "right", "up", "down" } else { "tl", "tr", "bl", "br" }
+			elseif name == "direction" then { "left", "right", "up", "down" } else { "tl", "tr", "bl", "br", "fullscreen" }
 		local at = table.find(values, text(state, name)) or 1
 		if k.name == "left" or k.name == "up" or k.name == "right" or k.name == "down" or k.name == "enter" or k.name == "space" then local step = if k.name == "left" or k.name == "up" then -1 else 1; at = ((at - 1 + step) % #values) + 1; set_field(state, name, values[at]); return true end
 		return false
@@ -550,7 +547,7 @@ local function event(state: State, ev: UiEvent, cx: BlockCx): ()
 	if act == "select" then if value == state.selected then return end; if state.dirty then discard(state, value, nil) else show_action(state, value) end
 	elseif act == "new" then if state.dirty then discard(state, "new", nil) else new_action(state, nil) end
 	elseif act == "preset" then if state.dirty then discard(state, "preset", value) else new_action(state, value) end
-	elseif act == "cancel" or act == "delete" or act == "reload" or act == "advanced" or act == "record" or act == "record-done" or act == "record-cancel" or act == "clear-chord" then invoke(state, act)
+	elseif act == "cancel" or act == "delete" or act == "reload" or act == "record" or act == "record-done" or act == "record-cancel" or act == "clear-chord" then invoke(state, act)
 	elseif act == "set" then local name, value2 = string.match(value, "^([^|]+)|(.+)$"); if name and value2 then set_field(state, name, value2); state.field = "choice-" .. name end end
 end
 local manager: BlockDef<State> = { init = init, view = view, title = function() return "快捷动作管理器" end, key = key, event = event,

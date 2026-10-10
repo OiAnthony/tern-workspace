@@ -3,6 +3,7 @@
 local model = require("./model")
 
 local execute = {}
+local pending_expansion: { [number]: TimerHandle } = {}
 
 local function trim(value: string): string
 	return (value:gsub("^%s+", ""):gsub("%s+$", ""))
@@ -251,6 +252,28 @@ local function launch_background(action: model.Action, cwd: string): (boolean, s
 	return true, "Started in background"
 end
 
+local function place_float(action: model.Action, cx: WindowCx, pane: number, over: number?): (boolean, string?)
+	local ok, result, err = pcall(function()
+		if pending_expansion[pane] then pending_expansion[pane]:cancel(); pending_expansion[pane] = nil end
+		local corner: Corner = if action.corner == "fullscreen" then "br" else action.corner
+		-- PiP expansion resets on the next window update after re-floating.
+		local floated, reason = cx.layout:float(pane, over, corner, { focus = action.focus })
+		if not floated then return false, reason end
+		if action.focus then cx.layout:focus(pane) end
+		if action.corner == "fullscreen" then
+			pending_expansion[pane] = tern.timer(0, function(timer_cx)
+				pending_expansion[pane] = nil
+				if timer_cx == nil or timer_cx.session:focused() ~= pane or timer_cx.session:pane(pane) == nil then return end
+				local expanded, expand_error = pcall(function() timer_cx:command("zoom") end)
+				if not expanded then timer_cx:toast("error", action.title, "Could not expand floating pane: " .. tostring(expand_error)) end
+			end)
+		end
+		return true, nil
+	end)
+	if not ok then return false, tostring(result) end
+	return result, err
+end
+
 local function launch_terminal(action: model.Action, cx: WindowCx, source_id: number, cwd: string, host: string): (boolean, string)
 	local command, command_error = shell_command(action)
 	if command == nil then
@@ -261,7 +284,10 @@ local function launch_terminal(action: model.Action, cx: WindowCx, source_id: nu
 		for _, record in load_instances(action.id, host, cwd) do
 			local existing = reusable_pane(cx, record.pane, cwd, record.program)
 			if existing ~= nil then
-				if action.focus then
+				if action.mode == "float" then
+					local placed, placement_error = place_float(action, cx, record.pane, nil)
+					if not placed then return false, "Could not position reusable floating pane: " .. tostring(placement_error) end
+				elseif action.focus then
 					local focused, focus_error = pcall(function() cx.layout:focus(record.pane) end)
 					if not focused then return false, "Could not focus reusable pane: " .. tostring(focus_error) end
 				end
@@ -293,12 +319,9 @@ local function launch_terminal(action: model.Action, cx: WindowCx, source_id: nu
 		persisted, persist_error = save_instance(action.id, host, cwd, pane_id, if pane_info then pane_info.program else nil)
 	end
 	if action.mode == "float" then
-		local float_ok, float_result, float_err = pcall(function()
-			return cx.layout:float(pane_id :: number, source_id, action.corner, reveal)
-		end)
-		if not float_ok or float_result ~= true then
-			local reason = if not float_ok then tostring(float_result) else (float_err or "Tern could not float the pane")
-			local message = "Terminal launched in split, but floating failed: " .. reason
+		local placed, placement_error = place_float(action, cx, pane_id, source_id)
+		if not placed then
+			local message = "Terminal launched, but floating placement failed: " .. tostring(placement_error)
 			if not persisted then
 				message ..= "; could not persist reusable pane: " .. tostring(persist_error)
 			end
@@ -307,14 +330,6 @@ local function launch_terminal(action: model.Action, cx: WindowCx, source_id: nu
 			end
 			cx:toast("error", action.title, message)
 			return true, message
-		end
-		if action.focus then
-			local focused, focus_error = pcall(function() cx.layout:focus(pane_id :: number) end)
-			if not focused then
-				local message = "Floating terminal launched, but focus failed: " .. tostring(focus_error)
-				cx:toast("error", action.title, message)
-				return true, message
-			end
 		end
 	end
 	if not persisted then

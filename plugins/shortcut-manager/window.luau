@@ -280,7 +280,7 @@ tern.command({
 				return
 			end
 		end
-		local manager = cx:new_block("shortcut-manager.manager", { nonce(), tostring(source or 0), if origin ~= nil then origin.cwd or "" else "" }, "beside")
+		local manager = cx:new_block("shortcut-manager.manager", { nonce(), tostring(source or 0), if origin ~= nil then origin.cwd or "" else "" }, "tab")
 		if manager == nil then cx:toast("error", "Shortcut Manager Host-side 未加载") end
 	end,
 })

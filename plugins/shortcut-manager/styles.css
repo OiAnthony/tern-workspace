@@ -80,6 +80,7 @@
   overflow-wrap: anywhere;
   cursor: pointer;
 }
+[data-surface='plugin.shortcut-manager.manager'] .sm-button.sm-fit { align-self: flex-start; width: auto; }
 [data-surface='plugin.shortcut-manager.manager'] .sm-action {
   display: flex;
   flex-direction: column;
@@ -153,6 +154,15 @@
   min-width: 0;
 }
 [data-surface='plugin.shortcut-manager.manager'] .sm-label { color: var(--t3); font-size: 0.9em; }
+[data-surface='plugin.shortcut-manager.manager'] .sm-divider {
+  border-top: 1px solid var(--l1);
+  margin-top: 8px;
+  padding-top: 16px;
+  padding-bottom: 4px;
+  color: inherit;
+  font-size: 1em;
+  font-weight: 600;
+}
 [data-surface='plugin.shortcut-manager.manager'] .sm-field .sf-input,
 [data-surface='plugin.shortcut-manager.manager'] .sm-field .sf-editor,
 [data-surface='plugin.shortcut-manager.manager'] .sm-toolbar > .sf-input {
@@ -165,9 +175,10 @@
 [data-surface='plugin.shortcut-manager.manager'] .sm-field .sf-editor:focus-within,
 [data-surface='plugin.shortcut-manager.manager'] .sm-toolbar > .sf-input:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
 [data-surface='plugin.shortcut-manager.manager'] .sm-shortcut { flex-direction: row; align-items: center; justify-content: space-between; gap: 12px; }
-[data-surface='plugin.shortcut-manager.manager'] .sm-shortcut-value { display: flex; flex: 1 1 0; align-items: center; gap: 12px; min-width: 0; overflow: auto; }
+[data-surface='plugin.shortcut-manager.manager'] .sm-shortcut-value { display: flex; flex: 1 1 0; align-items: center; min-width: 0; }
+[data-surface='plugin.shortcut-manager.manager'] .sm-shortcut-value .sm-field { flex: 1 1 0; flex-direction: row; align-items: center; gap: 12px; }
+[data-surface='plugin.shortcut-manager.manager'] .sm-shortcut-value .sf-input { flex: 1 1 0; width: 0; }
 [data-surface='plugin.shortcut-manager.manager'] .sm-shortcut-value .sm-label { flex-shrink: 0; }
-[data-surface='plugin.shortcut-manager.manager'] .sm-shortcut .sm-keycaps { flex-wrap: nowrap; flex-shrink: 0; }
 [data-surface='plugin.shortcut-manager.manager'] .sm-shortcut .sm-options { flex-wrap: nowrap; flex-shrink: 0; }
 [data-surface='plugin.shortcut-manager.manager'] .sm-keycaps { gap: 6px; }
 [data-surface='plugin.shortcut-manager.manager'] .sm-keycap {
@@ -224,6 +235,8 @@
 [data-surface='plugin.shortcut-manager.manager'] .sm-layout-preview.float-tr .target { top: 8px; right: 8px; }
 [data-surface='plugin.shortcut-manager.manager'] .sm-layout-preview.float-bl .target { bottom: 8px; left: 8px; }
 [data-surface='plugin.shortcut-manager.manager'] .sm-layout-preview.float-br .target { bottom: 8px; right: 8px; }
+[data-surface='plugin.shortcut-manager.manager'] .sm-layout-preview.float-fullscreen { position: relative; min-height: 100px; }
+[data-surface='plugin.shortcut-manager.manager'] .sm-layout-preview.float-fullscreen .target { position: absolute; top: 8px; right: 8px; bottom: 8px; left: 8px; }
 [data-surface='plugin.shortcut-manager.manager'] .sm-actions { max-height: 320px; overflow: auto; }
 [data-surface='plugin.shortcut-manager.manager'] .sm-layout { align-content: flex-start; }
 [data-surface='plugin.shortcut-manager.manager'] .sm-button:hover,

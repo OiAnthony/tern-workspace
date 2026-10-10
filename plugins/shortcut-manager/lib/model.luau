@@ -3,7 +3,7 @@
 export type Action = {
 	id: string, title: string, enabled: boolean, chord: string,
 	kind: string, program: string, args: { string }, shell: boolean, command: string,
-	mode: string, cwd_mode: string, cwd: string, direction: "right" | "down" | "left" | "up", corner: "tl" | "tr" | "bl" | "br",
+	mode: string, cwd_mode: string, cwd: string, direction: "right" | "down" | "left" | "up", corner: "tl" | "tr" | "bl" | "br" | "fullscreen",
 	focus: boolean, reuse: boolean, tern_action: string,
 }
 export type Binding = { action: string, previous: any, had_previous: boolean }
@@ -106,7 +106,7 @@ function model.validate(raw: any): (Action?, string?)
 	if raw.title:match("^%s*$") then return nil, "请填写动作名称" end
 	if not choice(raw.kind, { "process", "tern" }) or not choice(raw.mode, { "background", "pane", "tab", "float" })
 		or not choice(raw.cwd_mode, { "source", "fixed" }) or not choice(raw.direction, { "right", "down", "left", "up" })
-		or not choice(raw.corner, { "tl", "tr", "bl", "br" }) then return nil, "动作选项无效" end
+		or not choice(raw.corner, { "tl", "tr", "bl", "br", "fullscreen" }) then return nil, "动作选项无效" end
 	if type(raw.args) ~= "table" then return nil, "参数必须是列表" end
 	for index, argument in raw.args do
 		if type(index) ~= "number" or index % 1 ~= 0 or index < 1 or index > #raw.args or type(argument) ~= "string" or argument:find("\0", 1, true) then
@@ -121,6 +121,7 @@ function model.validate(raw: any): (Action?, string?)
 	elseif raw.program:match("^%s*$") then return nil, "请填写程序" end
 	if raw.kind == "process" and raw.cwd_mode == "fixed" and raw.cwd:sub(1, 1) ~= "/" then return nil, "固定目录必须是绝对路径" end
 	if raw.kind == "process" and raw.mode == "background" and raw.reuse then return nil, "后台进程没有可复用终端；请选择 pane、tab 或浮窗" end
+	if raw.kind == "process" and raw.mode == "float" and raw.corner == "fullscreen" and not raw.focus then return nil, "全屏浮窗必须切换到终端；离开焦点后会恢复普通浮窗" end
 	local chord, err = model.chord(raw.chord)
 	if chord == nil then return nil, err end
 	local action: Action = model.clone(raw)
