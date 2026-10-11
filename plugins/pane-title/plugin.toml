@@ -1,0 +1,6 @@
+schema = 1
+id = "pane-title"
+name = "Pane Title"
+version = "0.1.0"
+description = "Center the active tab's native title, application icons, and split composition in the window topbar."
+window = "window.luau"

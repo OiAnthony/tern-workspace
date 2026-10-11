@@ -12,22 +12,7 @@ local hideNative = [[
 .tabs-v.tn-status:not(.tabs-auto) #sidebar > .tn-vt-find { visibility: hidden; }
 ]]
 local revealNative = (string.gsub(hideNative, "hidden", "visible"))
-local windowTitle: string? = nil
-local function setTitle(value: string?)
-	if value == windowTitle then return end
-	windowTitle = value
-	if value == nil then
-		tern.css("window-title", '.tabs-v.tn-status:not(.tabs-auto) #tabbar .tb-tabs::after { content: none; }')
-	else
-		-- Pane titles are untrusted CSS string contents, not selectors or declarations.
-		local escaped = string.gsub(value, '[%c\\"]', function(char)
-			return string.format("\\%x ", string.byte(char))
-		end)
-		tern.css("window-title", '.tabs-v.tn-status:not(.tabs-auto) #tabbar .tb-tabs::after { content: "' .. escaped .. '"; }')
-	end
-end
 local function showNative()
-	setTitle(nil)
 	if nativeHidden then
 		tern.css("native-navigation", revealNative)
 		nativeHidden = false
@@ -127,18 +112,12 @@ update = function(cx: WindowCx)
 	local panes = cx.session:panes()
 	local focused = cx.session:focused()
 	local hasFocus = false
-	local title: string? = nil
 	for _, pane in panes do
 		if pane.pane == focused then
 			hasFocus = true
-			title = pane.title
-			if title == nil or title == "" then title = pane.program end
-			if title == nil or title == "" then title = pane.kind end
-			if title == nil or title == "" then title = "Pane " .. tostring(pane.pane) end
 			break
 		end
 	end
-	setTitle(title)
 	if hasFocus ~= nativeHidden then
 		nativeHidden = hasFocus
 		tern.css("native-navigation", if hasFocus then hideNative else revealNative)
