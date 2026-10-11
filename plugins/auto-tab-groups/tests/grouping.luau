@@ -148,4 +148,106 @@ assert(grouping.directory(pane(60, "/launch", 60, { kind = "database", path = "/
 assert(grouping.directory(pane(61, "", 61, { kind = "file", path = "C:\\project\\note.txt" })) == "C:\\project")
 assert(grouping.directory(pane(62, "C:\\", 62)) == "C:\\")
 
+local sidebar = require("../lib/sidebar")
+
+local function has_token(tone: string?, expected: string): boolean
+	if tone == nil then return false end
+	for token in string.gmatch(tone, "%S+") do
+		if token == expected then return true end
+	end
+	return false
+end
+
+local function pane_segment(view: any, id: number): any
+	local command = "plugin.auto-tab-groups.pane-" .. tostring(id)
+	for _, segment in view.segments do
+		if segment.command == command then return segment end
+	end
+	error("pane segment not found: " .. tostring(id))
+end
+
+local function build_sidebar(panes: { PaneInfo }, tabs: { TabInfo }): any
+	local pane_ids = {}
+	for _, item in panes do table.insert(pane_ids, item.pane) end
+	local model = grouping.build(panes, tabs, { session(1, 3, "main") }, host(3, "local", "local", pane_ids), {})
+	local tokens: { [string]: number } = {}
+	for _, group in model.sessions do
+		for _, project in group.projects do tokens[project.key] = 1 end
+	end
+	return sidebar.build(model, {}, tokens)
+end
+
+-- Same-tab panes retain independent working/unread marks; seeing one never clears another.
+do
+	local panes: { PaneInfo } = {
+		pane(71, "/shared", 7, { title = "Running", busy = true, kind = "terminal" }),
+		pane(72, "/shared", 7, { title = "Unread", alert = true, at_prompt = true, kind = "agent" }),
+	}
+	local tabs = { tab(7, 1, 1, { panes = 2 }) }
+	local view = build_sidebar(panes, tabs)
+	local running = pane_segment(view, 71)
+	local unread = pane_segment(view, 72)
+	assert(has_token(running.tone, "atg-busy") and not has_token(running.tone, "atg-alert"))
+	assert(has_token(unread.tone, "atg-alert") and not has_token(unread.tone, "atg-busy"))
+	panes[2].alert = false
+	panes[2].focused = true
+	local read = pane_segment(build_sidebar(panes, tabs), 72)
+	assert(read.text == "Unread" and read.tone == "atg-pane atg-focused")
+	assert(has_token(pane_segment(build_sidebar(panes, tabs), 71).tone, "atg-busy"))
+end
+
+-- Seen prompt, failure and exit metadata never manufacture a new notification mark.
+do
+	local panes: { PaneInfo } = {
+		pane(73, "/read", 8, { title = "Prompt", at_prompt = true, alert = false }),
+		pane(74, "/read", 8, { title = "Error", error = "failed", alert = false }),
+		pane(75, "/read", 8, { title = "Exited", exited = 7, alert = false }),
+	}
+	local tabs = { tab(8, 1, 1, { panes = 3 }) }
+	local view = build_sidebar(panes, tabs)
+	for _, item in panes do assert(pane_segment(view, item.pane).tone == "atg-pane") end
+	panes[1].busy = true
+	assert(has_token(pane_segment(build_sidebar(panes, tabs), 73).tone, "atg-busy"))
+	panes[1].busy = false
+	assert(pane_segment(build_sidebar(panes, tabs), 73).tone == "atg-pane")
+end
+
+-- Alert, focus, and floating are orthogonal to the main state; parked and native panes keep their own semantics.
+do
+	local panes: { PaneInfo } = {
+		pane(77, "/flags", 10, { title = "Focused alert", focused = true, alert = true, busy = true }),
+		pane(78, "", nil, { title = "Parked file", parked = true, path = "/files/parked.txt", kind = "file" }),
+		pane(79, "", 10, { title = "Native file", kind = "file", path = "/files/native.txt" }),
+		pane(80, "/flags", 10, { title = "Floating", floating = true, at_prompt = true }),
+	}
+	local view = build_sidebar(panes, { tab(10, 1, 1, { panes = 3 }) })
+	local focused = pane_segment(view, 77)
+	assert(has_token(focused.tone, "atg-focused") and has_token(focused.tone, "atg-alert") and has_token(focused.tone, "atg-busy"))
+	local parked
+	for _, segment in view.segments do
+		if segment.text == "Parked file" then parked = segment end
+	end
+	assert(parked ~= nil and parked.command == nil and has_token(parked.tone, "atg-parked"))
+	local native = pane_segment(view, 79)
+	assert(native.text == "Native file")
+	assert(not has_token(native.tone, "atg-busy") and not has_token(native.tone, "atg-alert"))
+	local floating = pane_segment(view, 80)
+	assert(has_token(floating.tone, "atg-floating") and not has_token(floating.tone, "atg-alert"))
+end
+
+-- Pane labels preserve title/program/kind/id fallback and literal status-looking names without added suffixes.
+do
+	local panes: { PaneInfo } = {
+		pane(81, "/names", 11, { title = "Busy", busy = true }),
+		pane(82, "/names", 11, { program = "Error", exited = 1 }),
+		pane(83, "/names", 11, { kind = "file" }),
+		pane(84, "/names", 11, {}),
+	}
+	local view = build_sidebar(panes, { tab(11, 1, 1, { panes = 4 }) })
+	assert(pane_segment(view, 81).text == "Busy")
+	assert(pane_segment(view, 82).text == "Error")
+	assert(pane_segment(view, 83).text == "file")
+	assert(pane_segment(view, 84).text == "Pane 84")
+end
+
 print("grouping tests passed")

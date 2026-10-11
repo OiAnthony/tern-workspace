@@ -26,16 +26,18 @@ local function pane_label(pane: PaneInfo): string
 	local title = text(pane.title)
 	local fallback = text(pane.program)
 	if fallback == "" then fallback = text(pane.kind) end
-	local label = if title ~= "" then title else if fallback ~= "" then fallback else "Pane " .. tostring(pane.pane)
-	local markers = {}
-	if pane.parked then table.insert(markers, "Parked") end
-	if pane.busy then table.insert(markers, "Busy") end
-	if pane.alert then table.insert(markers, "Alert") end
-	if text(pane.error) ~= "" then table.insert(markers, "Error") end
-	if pane.exited ~= nil then table.insert(markers, "Exit " .. tostring(pane.exited)) end
-	if pane.floating then table.insert(markers, "Floating") end
-	if #markers > 0 then label ..= " — " .. table.concat(markers, ", ") end
-	return label
+	return if title ~= "" then title else if fallback ~= "" then fallback else "Pane " .. tostring(pane.pane)
+end
+
+
+local function pane_tone(pane: PaneInfo, parked: boolean): string
+	local tone = "atg-pane"
+	if parked then tone ..= " atg-parked" elseif pane.focused then tone ..= " atg-focused" end
+	-- Tern clears alert when the pane is seen. Prompt/exit metadata is not an unread mark.
+	if pane.busy == true then tone ..= " atg-busy" end
+	if pane.alert then tone ..= " atg-alert" end
+	if pane.floating then tone ..= " atg-floating" end
+	return tone
 end
 
 local function render_project(view: View, project: grouping.Project, folded: { [string]: boolean }, tokens: { [string]: number }, parked: boolean)
@@ -43,10 +45,9 @@ local function render_project(view: View, project: grouping.Project, folded: { [
 	if project_token == nil then return end
 	local id = "group-" .. tostring(project_token)
 	local is_folded = folded[project.key] == true
-	local label = (if is_folded then "▸ " else "▾ ") .. project.label
 	local command = "plugin.auto-tab-groups." .. id
 	action(view, id, { kind = "fold", key = project.key, label = "Toggle project: " .. project.label })
-	add_row(view, label, "atg-group", command)
+	add_row(view, project.label, if is_folded then "atg-group atg-folded" else "atg-group", command)
 
 	local children_visible = not is_folded
 	for _, pane in project.panes do
@@ -57,12 +58,11 @@ local function render_project(view: View, project: grouping.Project, folded: { [
 			action(view, pane_id, { kind = "focus", pane = pane.pane, label = "Focus pane " .. tostring(pane.pane) .. ": " .. pane_label(pane) .. " — " .. project.label })
 		end
 		if children_visible then
-			local paneText = pane_label(pane)
-			if pane.parked or parked then
-				add_info(view, paneText, "atg-parked")
-			else
-				add_row(view, paneText, if pane.focused then "atg-focused" else "atg-pane", pane_command)
-			end
+			table.insert(view.segments, {
+				text = pane_label(pane),
+				tone = pane_tone(pane, pane.parked == true or parked),
+				command = pane_command,
+			})
 		end
 	end
 end
