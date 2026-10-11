@@ -53,10 +53,13 @@ local function refresh_repository(cx: WindowCx?)
 	if pane == nil or pane.cwd == nil or pane.cwd == "" then
 		return
 	end
-	cx.git:repo(pane.pane):next(function(repo, err)
-		if generation == repository_generation then
-			is_repository = repo ~= nil and err == nil
-		end
+	-- A missing executable raises before the process callback can run.
+	pcall(function()
+		tern.process.run({ "git", "rev-parse", "--is-inside-work-tree" }, { cwd = pane.cwd, timeout_ms = 2000 }, function(result)
+			if generation == repository_generation then
+				is_repository = result.status == 0 and trim(result.stdout) == "true"
+			end
+		end)
 	end)
 end
 
@@ -81,7 +84,13 @@ tern.command({
 	title = "Git Open: Toggle Browser",
 	icon = "link",
 	group = "Git",
+	available = function()
+		return is_repository
+	end,
 	run = function(cx)
+		if not is_repository then
+			return
+		end
 		local use_system = tern.kv.get(browser_key) ~= "system"
 		tern.kv.set(browser_key, if use_system then "system" else "builtin")
 		cx:toast("info", if use_system then "Git Open: System default browser" else "Git Open: Built-in browser")
@@ -98,6 +107,9 @@ tern.command({
 		return is_repository
 	end,
 	run = function(cx)
+		if not is_repository then
+			return
+		end
 		local pane = focused_pane(cx)
 		if pane == nil or pane.cwd == nil or pane.cwd == "" then
 			cx:toast("error", "No focused repository")

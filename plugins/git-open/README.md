@@ -5,13 +5,13 @@
 ## 行为
 
 - 在 Tern Commands 中提供 `Git Open: Open in GitHub`。
-- 仅当当前聚焦 pane 位于 Git 仓库内时显示。
-- 仓库检测使用 Tern 的异步 `cx.git:repo`；聚焦 pane、关闭 pane、工作目录变化或 shell 命令结束后刷新。检测完成前暂不显示命令，`available` 只读取缓存，不遍历文件系统。
+- 仅当当前聚焦 pane 位于 Git 工作区内且 Tern 环境能执行 `git` 时，启用打开仓库和切换浏览器两个命令。缺少 Git、非仓库目录或检测未完成时，命令不可用；直接调用 action 也不会执行。
+- 仓库检测异步执行 `git rev-parse --is-inside-work-tree`，超时为 2 秒；聚焦 pane、关闭 pane、工作目录变化或 shell 命令结束后刷新。缺少 Git 或检测失败时保持不可用，不弹错误提示。`available` 只读取缓存，过期检测结果不会覆盖当前 pane 的状态。
 - 读取 `origin` remote，并将 HTTPS、SSH、scp-like remote 地址转换为 Web URL。
 - 缺少 `origin` 时仅提示 `No Git remote named origin`，不禁用命令；添加 remote 后可以直接再次使用。
 - 默认使用 Tern 内置浏览器，通过 `cx:open` 新增浏览器 pane。插件调用会跳过 link/open 路由。
 - 在 Tern Commands 中运行 `Git Open: Toggle Browser`，可在内置浏览器和系统默认浏览器之间切换。Toast 会显示切换后的模式。
-- 选择保存在插件的 `tern.kv` 中，所有窗口共享，插件重载或 Tern 重启后保留；切换命令不要求当前 pane 位于 Git 仓库内。
+- 选择保存在插件的 `tern.kv` 中，所有窗口共享，插件重载或 Tern 重启后保留；切换命令与打开命令使用相同的 Git 环境启用条件。
 - 系统默认浏览器通过系统 URL opener 打开：macOS 使用 `open`，Linux 使用 `xdg-open`，Windows 使用 `explorer.exe`。启动失败时显示错误，不自动退回内置浏览器。
 
 ## 快捷键
@@ -45,11 +45,14 @@ luau-lsp analyze \
 
 人工验收：在有 `origin` 的 Git 仓库中执行 `Git Open: Open in GitHub`，确认默认新增内置浏览器 pane；切回仓库 pane，执行 `Git Open: Toggle Browser` 后再次打开，确认交给系统默认浏览器；重载插件后再次打开，确认保留选择。再次执行切换命令可恢复内置浏览器。
 
+环境验收：在非仓库目录中确认两个命令不可用；进入 Git 工作区后确认恢复，离开后再次不可用。用不包含 `git` 的 `PATH` 启动隔离的 Tern 实例，确认即使位于仓库内也不启用命令，直接调用 `plugin.git-open.open` 或 `plugin.git-open.toggle-browser` 不产生 handler 错误。检测结果以 Tern 进程的环境为准，不是 shell 临时修改的 `PATH`。
+
 ## 权限与外部依赖
 
 这是一个 Window-side plugin，不包含 Host-side entry。它需要：
 
 - 读取当前 pane 的工作目录；
+- 在该目录执行 `git rev-parse --is-inside-work-tree`，检测 Git 可执行文件与工作区；
 - 在该目录执行 `git remote get-url origin`；
 - 按选择请求 Tern 内置浏览器打开 URL，或执行系统 URL opener；
 - 在插件数据目录保存浏览器选择。
