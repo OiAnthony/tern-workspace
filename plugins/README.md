@@ -21,5 +21,4 @@ plugins/<plugin-id>/
 | --- | --- |
 | [git-open](git-open/README.md) | 打开当前 Git 项目的远程页面 |
 | [shortcut-manager](shortcut-manager/README.md) | 原生管理面板、自定义快捷键、后台命令、pane / tab / PiP |
-| [auto-tab-groups](auto-tab-groups/README.md) | 按目录/Git root 自动分组的左侧 tab / pane 导航 |
 | [pane-title](pane-title/README.md) | 在窗口顶部居中复用当前原生 tab 的图标与标题 |

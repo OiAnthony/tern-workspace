@@ -130,7 +130,7 @@ There is currently no documented build command, package-manager command, lint wr
 
 ## Testing & QA
 
-There is no workspace-wide test runner. `auto-tab-groups` has standalone Luau consumer regressions (`luau plugins/auto-tab-groups/tests/grouping.luau`) and an isolated native sidebar regression (`bash plugins/auto-tab-groups/tests/sidebar.sh`, requires Tern and jq). Its README documents static analysis and native-runtime acceptance checks.
+There is no workspace-wide test runner. The Pane Title native runner requires Tern, Bash, jq, Python 3, and `vi`; its README documents the isolated native-runtime checks.
 
 For a new or changed plugin, use the documented risk-based checks:
 

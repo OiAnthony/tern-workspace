@@ -27,7 +27,6 @@ cleanup() {
 trap cleanup EXIT
 mkdir -p "$tmp/crates/tern" "$tmp/crates/plugins/fixtures" "$tmp/config"
 cp -R "$plugin" "$tmp/crates/plugins/fixtures/pane-title"
-if [[ -n "${2:-}" ]]; then cp -R "$2" "$tmp/crates/plugins/fixtures/auto-tab-groups"; fi
 STENCIL_FIXTURE_ROOT="$tmp/crates/tern" TERN_CONFIG_DIR="$tmp/config" \
 TERN_DAEMON_SOCKET="$tmp/daemon.sock" tern serve --control "$socket" --out "$tmp/shots" \
     </dev/null >"$tmp/runtime.log" 2>&1 &
@@ -131,15 +130,6 @@ python3 "$checker" different 1280 "$a" "$b"
 focus "$first"
 returned=$(shot returned)
 python3 "$checker" same 1280 "$a" "$returned"
-if [[ -n "${2:-}" ]]; then
-    group=$(ctl tree '[data-plugin="auto-tab-groups"]' | jq -r '.nodes[].title // "" | select(startswith("plugin.auto-tab-groups.group-"))')
-    ctl plugins run "$group" >/dev/null
-    folded=$(shot folded)
-    python3 "$checker" same 1280 "$a" "$folded"
-    ctl plugins run plugin.auto-tab-groups.toggle >/dev/null
-    independent=$(shot sidebar-disabled)
-    python3 "$checker" same 1280 "$a" "$independent"
-fi
 ctl files show >/dev/null
 files=$(shot files)
 python3 "$checker" same 1280 "$a" "$files"

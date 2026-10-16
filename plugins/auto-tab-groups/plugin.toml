@@ -1,6 +1,0 @@
-schema = 1
-id = "auto-tab-groups"
-name = "Auto Tab Groups"
-version = "0.1.0"
-description = "Automatic project navigation for tabs and panes in the native sidebar."
-window = "window.luau"
