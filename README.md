@@ -9,7 +9,7 @@
 | [Pane Title](plugins/pane-title/README.md) | 在窗口顶部居中显示当前 tab 的原生图标和标题 | 使用 Tern 的 **Vertical tabs** 时默认显示 |
 | [Shortcut Manager](plugins/shortcut-manager/README.md) | 为命令和 Tern 动作配置快捷键，选择后台、分屏、新标签页或浮动终端 | 在命令面板运行 **Shortcut Manager: 管理快捷动作** |
 | [Git Open](plugins/git-open/README.md) | 打开当前 Git 仓库的远程页面 | 在仓库终端中先按 `Ctrl+B`，松开后按 `G` |
-| [Session Name](plugins/session-name/README.md) | 按 main pane 目录名自动命名 Session，手动改名后停止同步 | 新建 Session 后由插件自动处理 |
+| [Auto Session](plugins/auto-session/README.md) | 按 main pane 目录名自动命名 Session，并在所有 pane 关闭或移出变空时自动关闭 Session | 新建或关闭 Session pane 后由插件自动处理 |
 
 ## 安装
 
@@ -61,7 +61,7 @@ git pull --ff-only
 ```sh
 tern plugin install ./plugins/pane-title
 tern plugin install ./plugins/shortcut-manager
-tern plugin install ./plugins/session-name
+tern plugin install ./plugins/auto-session
 ```
 
 Tern 的 `install` 接收一个插件包目录。仓库根目录不是插件包，因此直接安装仓库 URL 会因为缺少根目录 `plugin.toml` 而失败。
@@ -108,7 +108,7 @@ Pane Title 在 **Vertical tabs** 模式下显示当前 tab 的图标和原生标
 ```sh
 git pull
 tern plugin install ./plugins/git-open --force
-tern plugin install ./plugins/session-name --force
+tern plugin install ./plugins/auto-session --force
 ```
 
 将 `git-open` 换成目标插件的目录名，多个插件需要分别更新。`--force` 替换已安装的副本，不用于覆盖 link 的插件。

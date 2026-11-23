@@ -1,6 +1,0 @@
-schema = 1
-id = "session-name"
-name = "Session Name"
-version = "0.1.0"
-description = "Name Sessions after their main pane directory until a manual rename is detected."
-window = "window.luau"
