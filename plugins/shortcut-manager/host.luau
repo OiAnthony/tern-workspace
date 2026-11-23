@@ -12,18 +12,14 @@ type State = {
 	selected: string?, draft: Action?, delete_id: string?, is_new: boolean, dirty: boolean, search: string,
 	status: string, error: string?, inspection: any, confirm_delete: boolean, confirm_discard: boolean,
 	pending: string?, pending_preset: string?, field: string, cursor: number, anchor: number?, focus_ready: boolean,
-	launch: string, input_error: string?, recording: boolean, recorded: { string }, action_search: string,
+	launch: string, input_error: string?, recording: boolean, recorded: { string },
 }
 type Key = { name: string, text: string?, ctrl: boolean, alt: boolean, shift: boolean, meta: boolean }
 
 local function text(state: State, name: string): string
 	if name == "search" then return state.search end
-	if name == "action_search" then return state.action_search end
 	if name == "launch" then return state.launch end
 	if name == "chord" and state.recording then return table.concat(state.recorded, ">") end
-	if name == "launch_kind" then
-		return if state.draft and state.draft.kind == "tern" then "tern" else "process"
-	end
 	local d = state.draft
 	if d == nil then return "" end
 	local value = (d :: any)[name]
@@ -53,7 +49,6 @@ local function focus(state: State, name: string, cx: BlockCx): ()
 	elseif name == "button-record" or name == "button-clear-chord" then id = root .. "shortcut.options." .. name
 	elseif name == "button-discard-confirm" or name == "button-discard-cancel" then id = root .. "confirm-actions." .. name
 	elseif name == "button-save" or name == "button-cancel" then id = (if state.draft ~= nil and not state.confirm_discard then "main.1.1.heading.form-actions." else root .. "form-actions.") .. name
-	elseif name:sub(1, 14) == "button-native-" then id = root .. "catalog." .. name
 	elseif name:sub(1, 7) == "button-" then id = root .. name end
 	local ops: { any } = { { "reveal", id, "nearest" } }
 	if name:sub(1, 7) ~= "button-" and name:sub(1, 7) ~= "choice-" then table.insert(ops, { "focus", id }) end
@@ -61,7 +56,6 @@ local function focus(state: State, name: string, cx: BlockCx): ()
 end
 local function set_field(state: State, name: string, value: string): ()
 	if name == "search" then state.search = value; return end
-	if name == "action_search" then state.action_search = value; return end
 	local d = state.draft
 	if d == nil then return end
 	if name == "launch" then
@@ -76,9 +70,6 @@ local function set_field(state: State, name: string, value: string): ()
 	elseif name == "shell" then
 		d.shell = value == "true"
 		set_field(state, "launch", state.launch)
-	elseif name == "launch_kind" then
-		d.kind = value
-		state.inspection = nil
 	elseif name == "mode" then d.mode = value; if value == "background" then d.reuse = false end
 	elseif name == "enabled" or name == "focus" or name == "reuse" then (d :: any)[name] = value == "true"
 	else (d :: any)[name] = value end
@@ -121,7 +112,7 @@ local function button(label: string, action: string, class: string?, active: boo
 end
 local function link(label: string, href: string, class: string?, active: boolean?): any
 	local operation = href:match("^shortcut%-manager://[%w%-]+/(.+)$") or "open"
-	local key = "button-" .. (if operation == "inspect-actions" then "inspect" elseif operation == "replace-save" then "replace" elseif operation:sub(1, 14) == "choose-action/" then "native-" .. operation:sub(15) else operation)
+	local key = "button-" .. (if operation == "replace-save" then "replace" else operation)
 	return ui.el("button", { key = key, class = (class or "sm-button") .. (if active then " keyboard" else ""), text = label, href = href, actions = { click = "open" } })
 end
 local function text_field(state: State, name: string, label: string, multiline: boolean?, placeholder: string?): any
@@ -134,7 +125,6 @@ end
 local function choice_label(name: string, value: string): string
 	local labels = {
 		enabled = { ["true"] = "启用", ["false"] = "停用" },
-		launch_kind = { process = "运行命令", tern = "Tern 动作" },
 		shell = { ["false"] = "直接执行", ["true"] = "通过 Shell" },
 		mode = { background = "后台进程", pane = "分屏终端", tab = "新标签页", float = "浮动终端" },
 		cwd_mode = { source = "跟随当前目录", fixed = "指定目录" }, focus = { ["true"] = "切换到终端", ["false"] = "保持当前焦点" },
@@ -184,16 +174,15 @@ local function feedback(state: State, items: { any })
 	end
 end
 local function preview(state: State, d: Action): any
-	local launch = if d.kind == "tern" then d.tern_action elseif d.shell then d.command else state.launch
+	local launch = if d.shell then d.command else state.launch
 	local cwd = if d.cwd_mode == "fixed" then d.cwd else state.source_cwd
-	local description = if d.kind == "tern" then "运行 Tern 原生动作" else choice_label("mode", d.mode) .. " · " .. (if cwd == "" then "没有目标目录" else cwd)
-	if d.kind == "process" then description ..= " · " .. choice_label("shell", tostring(d.shell)) end
-	if d.kind == "process" and d.mode ~= "background" then description ..= " · " .. choice_label("focus", tostring(d.focus)) .. " · " .. choice_label("reuse", tostring(d.reuse)) end
+	local description = choice_label("mode", d.mode) .. " · " .. (if cwd == "" then "没有目标目录" else cwd) .. " · " .. choice_label("shell", tostring(d.shell))
+	if d.mode ~= "background" then description ..= " · " .. choice_label("focus", tostring(d.focus)) .. " · " .. choice_label("reuse", tostring(d.reuse)) end
 	local content = { ui.el("div", { class = "sm-label", text = "执行预览 · 不会自动运行" }),
 		ui.el("div", { class = "sm-preview-command", text = if launch == "" then "填写命令后，这里显示执行内容" else launch }),
 		ui.el("div", { class = "sm-muted", text = description }) }
 	if not d.enabled then table.insert(content, ui.el("div", { class = "sm-warning", text = "已停用：保存后不注册快捷键与命令面板动作。" })) end
-	if d.kind == "process" and (d.mode == "pane" or d.mode == "float") then
+	if d.mode == "pane" or d.mode == "float" then
 		local panes = { ui.el("div", { class = "sm-mini-pane", text = "当前面板" }), ui.el("div", { class = "sm-mini-pane target", text = if d.mode == "pane" then choice_label("direction", d.direction) .. "新终端" else choice_label("corner", d.corner) .. "浮窗" }) }
 		if d.mode == "float" and d.corner == "fullscreen" then table.remove(panes, 1) end
 		if d.mode == "pane" and (d.direction == "left" or d.direction == "up") then panes[1], panes[2] = panes[2], panes[1] end
@@ -232,41 +221,23 @@ local function editor(state: State): any
 		}) }
 	if state.recording then table.insert(items, ui.el("div", { class = "sm-warning", text = "依次按键可录制序列。Enter 完成，Esc 取消。系统或 Tern 保留的按键可在快捷键输入框手填。" })) end
 	table.insert(items, ui.el("div", { key = "shortcut", class = "sm-shortcut" }, shortcut))
-	table.insert(items, choices(state, "launch_kind", "动作类型", { "process", "tern" }))
-	if d.kind == "process" then
-		table.insert(items, text_field(state, "launch", "运行命令", true, "例如 code . 或 git status --short"))
-		table.insert(items, choices(state, "shell", "命令解释", { "false", "true" }))
-		table.insert(items, ui.el("div", { class = if d.shell then "sm-warning" elseif state.input_error then "sm-error" else "sm-muted",
-			text = if d.shell then "通过登录 Shell 执行，支持变量、管道与重定向。仅使用可信命令。" else state.input_error or "直接传入程序和参数；路径含空格时加引号。需要变量、管道或重定向时，选择通过 Shell。" }))
-	else
-		table.insert(items, link("浏览 Tern 动作", href .. "inspect-actions", nil, state.field == "button-inspect"))
-		if type(state.inspection) == "table" and state.inspection.actions ~= nil then table.insert(items, text_field(state, "action_search", "搜索 Tern 动作", false, "名称或 ID")) end
-		local catalog = {}
-		for _, value in if type(state.inspection) == "table" then state.inspection.actions or {} else {} do
-			local id = tostring(value.id or "")
-			if state.action_search ~= "" and not (tostring(value.title or "") .. " " .. id):lower():find(state.action_search:lower(), 1, true) then continue end
-			table.insert(catalog, link(tostring(value.title or id) .. (if value.available == false then " · 当前不可用" else ""), href .. "choose-action/" .. id, "sm-link", state.field == "button-native-" .. id))
-		end
-		if type(state.inspection) == "table" and state.inspection.actions ~= nil then
-			table.insert(items, ui.el("div", { key = "catalog", class = "sm-catalog" }, if #catalog == 0 then { ui.el("div", { class = "sm-muted", text = "没有匹配的动作。试试其他名称或 ID。" }) } else catalog))
-		end
-		table.insert(items, text_field(state, "tern_action", "手动 Tern 动作 ID", false, "例如 new_tab"))
-	end
+	table.insert(items, text_field(state, "launch", "运行命令", true, "例如 code . 或 git status --short"))
+	table.insert(items, choices(state, "shell", "命令解释", { "false", "true" }))
+	table.insert(items, ui.el("div", { class = if d.shell then "sm-warning" elseif state.input_error then "sm-error" else "sm-muted",
+		text = if d.shell then "通过登录 Shell 执行，支持变量、管道与重定向。仅使用可信命令。" else state.input_error or "直接传入程序和参数；路径含空格时加引号。需要变量、管道或重定向时，选择通过 Shell。" }))
 	table.insert(items, ui.el("div", { key = "advanced-divider", class = "sm-divider", text = "高级参数", attrs = { role = "separator" } }))
-	if d.kind == "process" then
-		table.insert(items, choices(state, "mode", "在哪里运行", { "background", "pane", "tab", "float" }))
-		if d.mode == "pane" then table.insert(items, choices(state, "direction", "分屏方向", { "left", "right", "up", "down" })) end
-		if d.mode == "float" then
-			table.insert(items, choices(state, "corner", "浮窗位置", { "tl", "tr", "bl", "br", "fullscreen" }))
-			if d.corner == "fullscreen" then table.insert(items, ui.el("div", { class = "sm-muted", text = "填满浮窗所在区域，不进入系统全屏。全屏时切换到终端；离开焦点后恢复普通浮窗。" })) end
-		end
-		if d.mode ~= "background" then
-			table.insert(items, choices(state, "focus", "启动后", if d.mode == "float" and d.corner == "fullscreen" then { "true" } else { "true", "false" }))
-			table.insert(items, choices(state, "reuse", "重复触发时", { "true", "false" }))
-		end
-		table.insert(items, choices(state, "cwd_mode", "工作目录", { "source", "fixed" }))
-		if d.cwd_mode == "fixed" then table.insert(items, text_field(state, "cwd", "目录绝对路径", false, "/Users/me/project")) end
+	table.insert(items, choices(state, "mode", "在哪里运行", { "background", "pane", "tab", "float" }))
+	if d.mode == "pane" then table.insert(items, choices(state, "direction", "分屏方向", { "left", "right", "up", "down" })) end
+	if d.mode == "float" then
+		table.insert(items, choices(state, "corner", "浮窗位置", { "tl", "tr", "bl", "br", "fullscreen" }))
+		if d.corner == "fullscreen" then table.insert(items, ui.el("div", { class = "sm-muted", text = "填满浮窗所在区域，不进入系统全屏。全屏时切换到终端；离开焦点后恢复普通浮窗。" })) end
 	end
+	if d.mode ~= "background" then
+		table.insert(items, choices(state, "focus", "启动后", if d.mode == "float" and d.corner == "fullscreen" then { "true" } else { "true", "false" }))
+		table.insert(items, choices(state, "reuse", "重复触发时", { "true", "false" }))
+	end
+	table.insert(items, choices(state, "cwd_mode", "工作目录", { "source", "fixed" }))
+	if d.cwd_mode == "fixed" then table.insert(items, text_field(state, "cwd", "目录绝对路径", false, "/Users/me/project")) end
 	table.insert(items, ui.el("div", { class = "sm-muted", text = "内部 ID：" .. d.id .. " · 自动生成，保存后保持不变" }))
 	table.insert(items, preview(state, d))
 	table.insert(items, link("试运行", href .. "try", "sm-button sm-fit", state.field == "button-try"))
@@ -275,7 +246,7 @@ local function editor(state: State): any
 	if state.confirm_delete then table.insert(items, ui.el("div", { class = "sm-warning", text = "再次确认才标记删除，随后保存才会生效。不终止已启动程序。" })) end
 	if state.error and type(state.inspection) == "table" and state.inspection.status == "conflict" then table.insert(items, link("确认替换冲突快捷键并保存", href .. "replace-save", "sm-button danger", state.field == "button-replace")) end
 	if state.error then table.insert(items, button("重新加载并丢弃草稿", "reload", nil, state.field == "button-reload")) end
-	if type(state.inspection) == "table" and state.inspection.keys ~= nil and state.inspection.actions == nil then
+	if type(state.inspection) == "table" and state.inspection.keys ~= nil then
 		local keys = {}; for binding in state.inspection.keys do table.insert(keys, binding) end; table.sort(keys)
 		for _, binding in keys do table.insert(items, ui.el("div", { class = "sm-inspection" }, { keycaps(binding), ui.el("div", { class = "sm-muted", text = table.concat(state.inspection.keys[binding], ", ") }) })) end
 	end
@@ -341,7 +312,7 @@ local function init(cx: BlockCx, args: { string }, saved: any): State
 		anchor = if type(snap) == "table" and type(snap.anchor) == "number" then snap.anchor else nil, focus_ready = false,
 		launch = if type(snap) == "table" and type(snap.launch) == "string" then snap.launch elseif draft then (if draft.shell then draft.command else command.format(draft.program, draft.args)) else "",
 		input_error = if type(snap) == "table" and type(snap.input_error) == "string" then snap.input_error else nil,
-		recording = false, recorded = {}, action_search = "" }
+		recording = false, recorded = {} }
 end
 local function delete_action(state: State): ()
 	if state.draft == nil or state.is_new or state.selected == nil then return end
@@ -388,25 +359,11 @@ local function order(state: State): { string }
 		else for _, preset in { "vscode", "zed", "idea", "lazygit", "lazydocker" } do table.insert(names, "button-preset-" .. preset) end end
 	else
 		for _, name in { "button-cancel", "button-save" } do table.insert(names, name) end
-		for _, name in { "title", "choice-enabled", "chord", "button-record", "button-clear-chord", "choice-launch_kind" } do table.insert(names, name) end
-		if d.kind == "process" then table.insert(names, "launch"); table.insert(names, "choice-shell")
-		else
-			table.insert(names, "button-inspect")
-			if type(state.inspection) == "table" and state.inspection.actions ~= nil then
-				table.insert(names, "action_search")
-				for _, a in state.inspection.actions do
-					if state.action_search == "" or (tostring(a.title or "") .. " " .. a.id):lower():find(state.action_search:lower(), 1, true) then table.insert(names, "button-native-" .. a.id) end
-				end
-			end
-			table.insert(names, "tern_action")
-		end
-		if d.kind == "process" then
-			table.insert(names, "choice-mode")
-			if d.mode == "pane" then table.insert(names, "choice-direction") end
-			if d.mode == "float" then table.insert(names, "choice-corner") end
-			if d.mode ~= "background" then table.insert(names, "choice-focus"); table.insert(names, "choice-reuse") end
-			table.insert(names, "choice-cwd_mode"); if d.cwd_mode == "fixed" then table.insert(names, "cwd") end
-		end
+		for _, name in { "title", "choice-enabled", "chord", "button-record", "button-clear-chord", "launch", "choice-shell", "choice-mode" } do table.insert(names, name) end
+		if d.mode == "pane" then table.insert(names, "choice-direction") end
+		if d.mode == "float" then table.insert(names, "choice-corner") end
+		if d.mode ~= "background" then table.insert(names, "choice-focus"); table.insert(names, "choice-reuse") end
+		table.insert(names, "choice-cwd_mode"); if d.cwd_mode == "fixed" then table.insert(names, "cwd") end
 		table.insert(names, "button-try")
 		if not state.is_new then table.insert(names, "button-delete") end
 		if state.error and type(state.inspection) == "table" and state.inspection.status == "conflict" then table.insert(names, "button-replace") end
@@ -463,16 +420,15 @@ local function key(state: State, k: Key, cx: BlockCx): boolean?
 		elseif string.sub(action, 1, 7) == "select-" then local id = string.sub(action, 8); if id == state.selected then return true end; if state.dirty then discard(state, id, nil) else show_action(state, id) end
 		elseif action == "discard-confirm" then continue_pending(state)
 		elseif action == "discard-cancel" then state.confirm_discard, state.pending, state.pending_preset, state.status = false, nil, nil, ""; state.focus_ready = false
-		elseif action == "save" or action == "inspect" or action == "try" or action == "replace" then
+		elseif action == "save" or action == "try" or action == "replace" then
 			persist(state)
-			cx:open("shortcut-manager://" .. state.token .. "/" .. (if action == "inspect" then "inspect-actions" elseif action == "replace" then "replace-save" else action))
-		elseif action:sub(1, 7) == "native-" then persist(state); cx:open("shortcut-manager://" .. state.token .. "/choose-action/" .. action:sub(8))
+			cx:open("shortcut-manager://" .. state.token .. "/" .. (if action == "replace" then "replace-save" else action))
 		else invoke(state, action) end
 		return true
 	end
 	if string.sub(state.field, 1, 7) == "choice-" then
 		local name = string.sub(state.field, 8)
-		local values = if name == "launch_kind" then { "process", "tern" } elseif name == "focus" and state.draft and state.draft.mode == "float" and state.draft.corner == "fullscreen" then { "true" }
+		local values = if name == "focus" and state.draft and state.draft.mode == "float" and state.draft.corner == "fullscreen" then { "true" }
 			elseif name == "shell" then { "false", "true" }
 			elseif name == "enabled" or name == "focus" or name == "reuse" then { "true", "false" }
 			elseif name == "mode" then { "background", "pane", "tab", "float" } elseif name == "cwd_mode" then { "source", "fixed" }
@@ -530,15 +486,10 @@ local function event(state: State, ev: UiEvent, cx: BlockCx): ()
 			if wanted then show_action(state, wanted) else state.draft, state.selected = nil, nil end
 			state.status = "已保存并应用。"
 		elseif response.status == "source" then state.source_id = if type(response.source) == "number" then response.source else nil; state.source_cwd = if type(response.source_cwd) == "string" then response.source_cwd else ""
-		elseif response.status == "selected-action" then
-			if state.draft then
-				state.draft.tern_action = tostring(response.action or "")
-				state.dirty, state.field, state.inspection, state.action_search = true, "button-inspect", nil, ""
-			end
 		elseif response.status == "inspection" then
 			state.inspection = response
 			state.error = if type(response.error) == "string" then response.error else nil
-			state.status = if response.actions ~= nil then "可用 Tern 动作" elseif type(response.message) == "string" then "上次试运行已触发：" .. response.message else "动作信息已加载"
+			state.status = if type(response.message) == "string" then "上次试运行已触发：" .. response.message else "有效快捷键已加载"
 		elseif response.status == "conflict" then state.error, state.status, state.inspection = response.error or "快捷键冲突。", "确认替换后将覆盖错误信息列出的冲突快捷键。", response
 		elseif response.status == "saving" then state.status = "正在应用快捷键设置…"
 		elseif response.status == "error" then state.error, state.status = response.error or "保存失败。", "" end

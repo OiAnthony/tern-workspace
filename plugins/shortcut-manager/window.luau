@@ -212,22 +212,8 @@ local function route(link: LinkRequest, cx: WindowCx): RouteDecision?
 			if action == nil then respond(cx, pane.pane, { status = "error", error = validation_error }); return false end
 			local launched, message = execute.run(action, cx, draft.source)
 			respond(cx, pane.pane, { status = if launched then "inspection" else "error", message = if launched then message else nil, error = if launched then nil else message })
-		elseif operation == "inspect-actions" then
-			local actions = {}
-			for _, action in cx.actions:list() do
-				if not action.id:match("^plugin%.shortcut%-manager%.") then
-					table.insert(actions, { id = action.id, title = action.label, group = action.group, keys = action.keys, available = action.available })
-				end
-			end
-			respond(cx, pane.pane, { status = "inspection", actions = actions, keys = cx.actions:keys() })
 		elseif operation == "check-key" then
 			respond(cx, pane.pane, { status = "inspection", keys = cx.actions:keys() })
-		elseif operation == "choose-action" then
-			local id = suffix:match("^/(.+)$")
-			if id == nil then error("未选择 Tern 动作") end
-			local selected = cx.actions:describe(id)
-			if selected.id:match("^plugin%.shortcut%-manager%.") then error("不能调用本插件动作") end
-			respond(cx, pane.pane, { status = "selected-action", action = selected.id })
 		end
 		return true
 	end)
@@ -251,7 +237,7 @@ end
 
 tern.override("save", function(cx) return manager_request(cx, "save") end)
 
-for _, definition in { { "manager-save", "保存并应用当前草稿", "save" }, { "manager-try", "试运行当前草稿", "try" }, { "manager-inspect", "选择 Tern 动作", "inspect-actions" }, { "manager-check", "查看有效快捷键", "check-key" } } do
+for _, definition in { { "manager-save", "保存并应用当前草稿", "save" }, { "manager-try", "试运行当前草稿", "try" }, { "manager-check", "查看有效快捷键", "check-key" } } do
 	local operation = definition[3]
 	tern.command({
 		id = definition[1], title = "Shortcut Manager: " .. definition[2], icon = "keyboard",

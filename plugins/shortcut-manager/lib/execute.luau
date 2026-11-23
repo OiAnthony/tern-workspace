@@ -367,19 +367,6 @@ function execute.source(cx: WindowCx, id: number?): (PaneInfo?, string?)
 end
 
 function execute.run(action: model.Action, cx: WindowCx, source_id: number?): (boolean, string)
-	if action.kind == "tern" then
-		if action.tern_action == "" then
-			return false, "Native Tern action is empty"
-		end
-		local ok, err = pcall(function()
-			cx:action(action.tern_action)
-		end)
-		if not ok then
-			return false, "Could not dispatch native action: " .. tostring(err)
-		end
-		return true, "Dispatched native action"
-	end
-
 	local source_pane, source_error = source(cx, source_id)
 	if source_error ~= nil then
 		return false, source_error

@@ -4,7 +4,7 @@ export type Action = {
 	id: string, title: string, enabled: boolean, chord: string,
 	kind: string, program: string, args: { string }, shell: boolean, command: string,
 	mode: string, cwd_mode: string, cwd: string, direction: "right" | "down" | "left" | "up", corner: "tl" | "tr" | "bl" | "br" | "fullscreen",
-	focus: boolean, reuse: boolean, tern_action: string,
+	focus: boolean, reuse: boolean,
 }
 export type Binding = { action: string, previous: any, had_previous: boolean }
 export type Config = { revision: number, actions: { Action }, bindings: { [string]: Binding } }
@@ -25,7 +25,7 @@ function model.new_action(preset: string?): Action
 		title = "新建动作", enabled = true, chord = "", kind = "process",
 		program = "", args = {}, shell = false, command = "", mode = "background",
 		cwd_mode = "source", cwd = "", direction = "right", corner = "br",
-		focus = true, reuse = false, tern_action = "",
+		focus = true, reuse = false,
 	}
 	if preset == "vscode" or preset == "zed" or preset == "idea" then
 		action.id = preset
@@ -95,7 +95,10 @@ end
 
 function model.validate(raw: any): (Action?, string?)
 	if type(raw) ~= "table" then return nil, "动作必须是对象" end
-	for _, key in { "id", "title", "chord", "kind", "program", "command", "mode", "cwd_mode", "cwd", "direction", "corner", "tern_action" } do
+	if raw.kind == "tern" then
+		return nil, "Tern 原生动作快捷键请直接在 Tern Settings → Keyboard 中配置"
+	end
+	for _, key in { "id", "title", "chord", "kind", "program", "command", "mode", "cwd_mode", "cwd", "direction", "corner" } do
 		if type(raw[key]) ~= "string" then return nil, "字段必须是文本：" .. key end
 		if raw[key]:find("\0", 1, true) then return nil, "字段不能包含 NUL：" .. key end
 	end
@@ -104,7 +107,7 @@ function model.validate(raw: any): (Action?, string?)
 	end
 	if not raw.id:match("^[a-z][a-z0-9%-]*$") or #raw.id > 32 or raw.id == "manage" or raw.id:match("^manager%-") then return nil, "动作 ID 必须以小写字母开头，最长 32 字符；manage 和 manager- 前缀保留给管理命令" end
 	if raw.title:match("^%s*$") then return nil, "请填写动作名称" end
-	if not choice(raw.kind, { "process", "tern" }) or not choice(raw.mode, { "background", "pane", "tab", "float" })
+	if raw.kind ~= "process" or not choice(raw.mode, { "background", "pane", "tab", "float" })
 		or not choice(raw.cwd_mode, { "source", "fixed" }) or not choice(raw.direction, { "right", "down", "left", "up" })
 		or not choice(raw.corner, { "tl", "tr", "bl", "br", "fullscreen" }) then return nil, "动作选项无效" end
 	if type(raw.args) ~= "table" then return nil, "参数必须是列表" end
@@ -113,19 +116,21 @@ function model.validate(raw: any): (Action?, string?)
 			return nil, "参数必须是连续的文本列表，不能包含 NUL"
 		end
 	end
-	if raw.kind == "tern" then
-		if raw.tern_action:match("^%s*$") then return nil, "请选择 Tern 动作" end
-		if raw.tern_action:match("^plugin%.shortcut%-manager%.") then return nil, "不能调用本插件动作，以免递归执行" end
-	elseif raw.shell then
+	if raw.shell then
 		if raw.command:match("^%s*$") then return nil, "请填写 shell 命令" end
 	elseif raw.program:match("^%s*$") then return nil, "请填写程序" end
-	if raw.kind == "process" and raw.cwd_mode == "fixed" and raw.cwd:sub(1, 1) ~= "/" then return nil, "固定目录必须是绝对路径" end
-	if raw.kind == "process" and raw.mode == "background" and raw.reuse then return nil, "后台进程没有可复用终端；请选择 pane、tab 或浮窗" end
-	if raw.kind == "process" and raw.mode == "float" and raw.corner == "fullscreen" and not raw.focus then return nil, "全屏浮窗必须切换到终端；离开焦点后会恢复普通浮窗" end
+	if raw.cwd_mode == "fixed" and raw.cwd:sub(1, 1) ~= "/" then return nil, "固定目录必须是绝对路径" end
+	if raw.mode == "background" and raw.reuse then return nil, "后台进程没有可复用终端；请选择 pane、tab 或浮窗" end
+	if raw.mode == "float" and raw.corner == "fullscreen" and not raw.focus then return nil, "全屏浮窗必须切换到终端；离开焦点后会恢复普通浮窗" end
 	local chord, err = model.chord(raw.chord)
 	if chord == nil then return nil, err end
-	local action: Action = model.clone(raw)
-	action.chord = chord
+	local action: Action = {
+		id = raw.id, title = raw.title, enabled = raw.enabled, chord = chord,
+		kind = "process", program = raw.program, args = model.clone(raw.args),
+		shell = raw.shell, command = raw.command, mode = raw.mode,
+		cwd_mode = raw.cwd_mode, cwd = raw.cwd, direction = raw.direction,
+		corner = raw.corner, focus = raw.focus, reuse = raw.reuse,
+	}
 	return action, nil
 end
 
@@ -160,6 +165,22 @@ end
 function model.load(): Config
 	local raw = tern.kv.get("config")
 	if raw == nil then return model.defaults() end
+	if type(raw) == "table" and type(raw.actions) == "table" then
+		local filtered = {}
+		local dropped = false
+		for _, raw_action in raw.actions do
+			if type(raw_action) == "table" and raw_action.kind == "tern" then
+				dropped = true
+			else
+				table.insert(filtered, raw_action)
+			end
+		end
+		if dropped then
+			local migrated = model.clone(raw)
+			migrated.actions = filtered
+			raw = migrated
+		end
+	end
 	local config, err = model.validate_config(raw)
 	if config == nil then error(err or "快捷动作配置无效") end
 	return config

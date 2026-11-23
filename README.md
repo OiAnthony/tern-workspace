@@ -7,9 +7,9 @@
 | 插件 | 用来做什么 | 安装后从哪里开始 |
 | --- | --- | --- |
 | [Pane Title](plugins/pane-title/README.md) | 在窗口顶部居中显示当前 tab 的原生图标和标题 | 使用 Tern 的 **Vertical tabs** 时默认显示 |
-| [Shortcut Manager](plugins/shortcut-manager/README.md) | 为命令和 Tern 动作配置快捷键，选择后台、分屏、新标签页或浮动终端 | 在命令面板运行 **Shortcut Manager: 管理快捷动作** |
+| [Shortcut Manager](plugins/shortcut-manager/README.md) | 为自定义命令配置快捷键，选择后台、分屏、新标签页或浮动终端 | 在命令面板运行 **Shortcut Manager: 管理快捷动作** |
 | [Git Open](plugins/git-open/README.md) | 打开当前 Git 仓库的远程页面 | 在仓库终端中先按 `Ctrl+B`，松开后按 `G` |
-| [Auto Session](plugins/auto-session/README.md) | 按 main pane 目录名自动命名 Session，并在所有 pane 关闭或移出变空时自动关闭 Session | 新建或关闭 Session pane 后由插件自动处理 |
+| [Auto Session](plugins/auto-session/README.md) | 按 main pane 目录名自动命名 Session，手动改名后锁定 | 打开或切换 Session 目录后自动生效 |
 
 ## 安装
 
@@ -93,7 +93,7 @@ Pane Title 在 **Vertical tabs** 模式下显示当前 tab 的图标和原生标
 
 1. 从要运行命令的终端打开命令面板，选择 **Shortcut Manager: 管理快捷动作**。
 2. 选择已有预设，或点击 **新建**，填写名称和快捷键。比如 `ctrl+b>c` 表示先按 `Ctrl+B`，松开后按 `C`。
-3. 选择 **运行命令**，填写 `code .` 等命令；要用管道、变量或重定向时，将 **命令解释** 改为 **通过 Shell**。也可以选择 **Tern 动作**。
+3. 填写 `code .` 等命令；要用管道、变量或重定向时，将 **命令解释** 改为 **通过 Shell**。
 4. 在 **高级参数** 中选择运行位置、工作目录，以及终端的焦点和复用方式。
 5. 检查执行预览，按需 **试运行**，再点击 **保存**。试运行会真实执行草稿，但不会保存配置。
 

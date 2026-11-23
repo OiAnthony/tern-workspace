@@ -2,6 +2,15 @@
 -- `tern plugin types DIR` writes this file into DIR; add its path to the
 -- `luau-lsp.types.definitionFiles` setting so `host.luau` and `window.luau` type-check.
 -- Members only one context has say `host only` or `window only` in their docs.
+--
+-- Budgets: every call into a plugin may run 2 s of Lua in the host half, 50 ms in the
+-- window half and 4 ms in chrome formatters and `available`; native calls (the `cx` API,
+-- `tern.fs`, `tern.kv`, starting a process, `require`'s compile) don't count, but a call
+-- may take at most ten budgets of wall time with them. A call past either raises
+-- `tern: <hook> exceeded <n> ms` and pauses that hook (every timer callback, say): 5 s, doubling
+-- for each trip within 10 min of the last pause's end, up to 5 min; due timer, process and fetch
+-- callbacks wait for the pause to end. Window halves hear `tern.on("budget")` as hooks pause and
+-- resume. A native call that never returns hangs its thread: in the window half, the window.
 
 --- `"host"` in `host.luau` (daemon side), `"window"` in `window.luau` (UI side).
 export type Context = "host" | "window"
@@ -9,8 +18,19 @@ export type Context = "host" | "window"
 --- Level of a toast in Tern's windows.
 export type ToastLevel = "success" | "info" | "error"
 
---- Where a file or block opens relative to the focused pane.
-export type How = "default" | "beside" | "below" | "split" | "tab" | "replace" | "preview"
+--- Where a file or block opens relative to the focused pane. `"over"` takes the focused (or
+--- target) pane's slot, parking that pane until the new block closes, then puts it back there.
+--- `"glimpse"` shows it over the whole tab, in no split, until the next click outside it.
+export type How =
+	"default"
+	| "beside"
+	| "below"
+	| "split"
+	| "tab"
+	| "replace"
+	| "over"
+	| "preview"
+	| "glimpse"
 
 --- What asked Tern to open a file.
 export type Origin = "palette" | "files" | "drop" | "link" | "system" | "cli" | "carly"
@@ -60,6 +80,34 @@ export type ProcessOptions = {
 	timeout_ms: number?,
 }
 
+--- Options of `tern.process.spawn`.
+export type SpawnOptions = {
+	--- Working directory; relative paths resolve against the plugin dir.
+	cwd: string?,
+	--- Variables added to the inherited environment.
+	env: { [string]: string }?,
+	--- How output is cut for `stdout` and `stderr`: "lines" (the default) gives each complete line without its line
+	--- end (`\n` or `\r\n`) and, when the stream ends, what is left unterminated; "chunks" gives the bytes of each
+	--- read. A line past 16 MiB arrives in pieces of that size.
+	split: ("lines" | "chunks")?,
+	--- Called with standard output as it arrives (window: plus a fresh `cx`).
+	stdout: ((data: string, cx: WindowCx?) -> ())?,
+	--- Called with standard error as it arrives (window: plus a fresh `cx`); without it `exit` gets its last 64 KiB.
+	stderr: ((data: string, cx: WindowCx?) -> ())?,
+	--- Called once when the process ended, after the last of its output (window: plus a fresh `cx`).
+	exit: ((result: SpawnExit, cx: WindowCx?) -> ())?,
+}
+
+--- How a `tern.process.spawn` child ended.
+export type SpawnExit = {
+	--- Its process id.
+	pid: number,
+	--- Exit code; -1 when ended by a signal (`child:kill` included).
+	status: number,
+	--- The last 64 KiB of its stderr when no `stderr` callback took it, else empty.
+	stderr: string,
+}
+
 --- Outcome of `tern.process.run`.
 export type ProcessResult = {
 	--- Exit code; -1 when killed (timeout) or ended by a signal.
@@ -82,6 +130,20 @@ export type FetchOptions = {
 	body: string?,
 	--- Fails the request when the whole exchange, redirects included, takes longer (default 30000).
 	timeout_ms: number?,
+	--- Called with the response body as it arrives instead of collecting it (window: plus a fresh `cx`): `chunk` is
+	--- the bytes of one read, `head` the status and headers (the same table every call). The result's `body` is then
+	--- empty and the 16 MiB cap does not apply, while `timeout_ms` still bounds the whole exchange. At most 16 MiB
+	--- wait for the callback; past that reading pauses until it catches up. Return `false` to stop the request: the
+	--- result then has `error = "stopped"`. Raises in Carly's VM.
+	stream: ((chunk: string, head: FetchHead, cx: WindowCx?) -> boolean?)?,
+}
+
+--- What a streamed response said before its body (`FetchOptions.stream`).
+export type FetchHead = {
+	--- HTTP status.
+	status: number,
+	--- Response headers by lowercase name; a repeated header's values joined with `", "`.
+	headers: { [string]: string },
 }
 
 --- Outcome of `tern.fetch`.
@@ -116,6 +178,13 @@ export type Node = {
 	--- Node kind (`"text"`, `"col"`, `"table"`, …).
 	k: string,
 	--- Props; any node also takes `key`, `tone`, `role` and `collapsed`. A `list` keeps its selected row in view only with `max = {lines = N}`.
+	--- A container with `transition = "layout"` (`transitionMs`, default 200) glides its descendants that carry a
+	--- `motionKey` (unique within it, kept across parents) to their new places on each update.
+	--- A container with `drag = act` lets the user drag its children to another index (a mouse drag; on a touch
+	--- screen, touch and hold, then drag); the release sends `{ev = "action", id = <container>, act, item = <child
+	--- id>, value = <new 0-based index>}` and nothing reaches the block while the child moves. A node with
+	--- `drop = act` takes a child of another `drag` container dropped on it: `{ev = "action", id = <node>, act,
+	--- item = <child id>, value = "before" | "after"}`.
 	p: { [string]: any }?,
 	--- Children.
 	c: { Node }?,
@@ -141,6 +210,8 @@ export type Col = {
 	grow: number?,
 	--- Where cells that don't fit are cut (default `"end"`).
 	truncate: Truncate?,
+	--- Cells in the mono face, for machine strings (ids, hashes, sizes) in a sans surface.
+	mono: boolean?,
 }
 
 --- A thin-bar table cell from `tern.ui.meter_cell` or `meter_parts_cell`.
@@ -158,8 +229,160 @@ export type MeterCell = {
 	},
 }
 
---- A table cell: a span list or a meter cell.
-export type Cell = Spans | MeterCell
+--- A text cell: `text` after a status dot (`dot`, a tone) or an icon (12px, colored by `tone`).
+export type TextCell = {
+	text: Spans,
+	--- Named icon before the text.
+	icon: string?,
+	--- A 6px status dot in this tone before the text (wins over `icon`).
+	dot: string?,
+	--- The icon's tone (default quiet ink).
+	tone: string?,
+	--- Tooltip.
+	title: string?,
+}
+
+--- A badge cell: the `badge` look.
+export type BadgeCell = {
+	badge: { text: string, tone: string?, title: string? },
+}
+
+--- A small button cell: a click sends `{ev = "action", id = <table>, act = act, item = <row id>}`
+--- and does not select the row.
+export type ButtonCell = {
+	button: {
+		text: string,
+		act: string,
+		icon: string?,
+		--- Keycaps after the label (display only).
+		keys: { string }?,
+		variant: ButtonVariant?,
+		--- Dimmed and inert; a string is the tooltip reason.
+		disabled: (boolean | string)?,
+	},
+}
+
+--- A sparkline cell the height of the text, 8 cells wide unless its column grows.
+export type SparkCell = {
+	spark: {
+		values: { number },
+		--- Line tone (default accent).
+		tone: string?,
+		--- Domain bottom (default 0).
+		min: number?,
+		--- Domain top (default the largest value).
+		max: number?,
+		title: string?,
+	},
+}
+
+--- A table cell: a span list, a meter, text after a mark, a badge, a button or a sparkline.
+export type Cell = Spans | MeterCell | TextCell | BadgeCell | ButtonCell | SparkCell
+
+--- A `tern.ui.table` row with an id: events name it as `item`.
+export type TableRow = {
+	id: string,
+	--- One cell per column, in order.
+	cells: { Cell },
+	--- Dimmed, no select/activate/menu; a string is the tooltip reason.
+	disabled: (boolean | string)?,
+	--- Right-click actions, each sending `{ev = "action", id = <table>, act = name, item = id}`; Copy row
+	--- follows them.
+	menu: { string }?,
+	--- Row tooltip.
+	title: string?,
+}
+
+--- Options of `tern.ui.table`.
+export type TableOpts = {
+	--- Rows take clicks: `{ev = "select", id, item}`, double-click `{ev = "activate", id, item}`.
+	selectable: boolean?,
+	--- The row id drawn selected, kept in view when it changes.
+	selected: string?,
+	--- Shown, muted and centered, when there are no rows.
+	empty: Spans?,
+}
+
+--- Options of `tern.ui.md`: how its code blocks run and show their heads.
+export type MdOpts = {
+	--- The folder a shell code block's Run runs in: `~` the home, a relative path under the pane's folder
+	--- (default the pane's). Run reports a path that is no folder.
+	cwd: string?,
+	--- `false`: shell code blocks offer no Run (for text the plugin does not trust).
+	run: boolean?,
+	--- Code block heads are icons (Run a play, Copy a copy turning into a check), their words in the tooltip
+	--- and accessible name.
+	icons: boolean?,
+	--- `always`: code block heads always show, above the code; `hover` (default) shows them on hover or
+	--- focus, and always on a phone.
+	head: ("hover" | "always")?,
+}
+
+--- How a `button` looks: `default` (a chip), `primary` (the one main action), `quiet` (no chrome until
+--- hovered) or `danger` (destructive).
+export type ButtonVariant = "default" | "primary" | "quiet" | "danger"
+
+--- Props of `tern.ui.button`, besides any common prop (`title`, `aria`, `key`, `tone`, `actions`, …). A click
+--- sends `{ev = "action", act = actions.click or "click"}`; disabled and busy buttons send nothing.
+export type ButtonProps = {
+	--- Leading icon name; with an empty label the button is icon-only (give it a `title`).
+	icon: string?,
+	--- Key names drawn as keycaps after the label (display only; the tooltip shows them too).
+	keys: { string }?,
+	--- Chrome (default `"default"`).
+	variant: ButtonVariant?,
+	--- `"md"` (28px: bars, heads, forms; the default) or `"sm"` (22px: inline, rows).
+	size: ("md" | "sm")?,
+	--- A pressed toggle.
+	on: boolean?,
+	--- Dimmed and inert; a string is the reason, shown as the tooltip.
+	disabled: (boolean | string)?,
+	--- A spinner in the icon's place; inert.
+	busy: boolean?,
+	[string]: any,
+}
+
+--- A tile of `tern.ui.stats`.
+export type StatItem = {
+	--- What is counted.
+	label: Spans,
+	--- The figure, drawn large with tabular digits.
+	value: Spans,
+	--- A line under it.
+	sub: Spans?,
+	--- Colors the value (`success`, `warning`, `error`, `info`, `accent`, …).
+	tone: string?,
+	--- Tooltip.
+	title: string?,
+}
+
+--- Props of `tern.ui.card`, besides any common prop (`collapsible`, `collapsed`, `status`, `tone`, …).
+export type CardProps = {
+	--- Head icon name (wins over the one a role implies); without one the body lines up with the head text.
+	icon: string?,
+	--- Dim text after the head text.
+	meta: Spans?,
+	--- Id of a child drawn at the head's end instead of the body (buttons, segmented tabs, a badge); clicks
+	--- on it never fold the card.
+	["end"]: string?,
+	[string]: any,
+}
+
+--- A `tabs` strip's look (`p.variant`): `underline` (the default) or `segmented` (a pill well sized to its tabs).
+export type TabsVariant = "underline" | "segmented"
+
+--- Panel props of an `overlay` node (through `tern.ui.node`), besides `head`, `anchor`, `size`, `modal`.
+export type OverlayProps = {
+	--- Head icon name.
+	icon: string?,
+	--- Dim text after the title.
+	meta: Spans?,
+	--- Id of a child drawn at the head's end.
+	["end"]: string?,
+	--- Id of a child drawn in the footer bar under the body (the sheet's actions).
+	foot: string?,
+	[string]: any,
+}
 
 --- A node of `tern.ui.tree`.
 export type TreeNode = {
@@ -221,14 +444,24 @@ export type Columns = {
 }
 
 --- An event from a node of a block or lens view (`{ev = "action", act = …, …}`). Blocks get only
---- action/select/activate/change/toggle/focus/edit/undo; lens events are not filtered. An action name containing
+--- action/select/activate/change/toggle/focus/edit/undo, and `send` (`id`, `text`: a prompt Tern submits into editor
+--- `id`) once they list the "send" feature; lens events are not filtered. An action name containing
 --- `=` is split into `act` and `value`; `mods` lists `shift`/`ctrl`/`alt`/`meta`, present only when a modifier was
---- held. `change` comes from a clicked `tern.ui.el` checkbox/radio (`id`, `name`, `value`, `checked`).
+--- held. `change` comes from a clicked `tern.ui.el` checkbox/radio (`id`, `name`, `value`, `checked`). A drag in a
+--- `drag` container or onto a `drop` node arrives as one `action` on the release (see `Node.p`).
 export type UiEvent = {
 	--- Event name.
 	ev: string,
 	--- The node the event came from.
 	id: string?,
+	--- `action`: the action's name, up to its first `=`.
+	act: string?,
+	--- What was picked inside `id`: a list item, a table row, or the child a `drag` container moved or a `drop`
+	--- node took (that child's id).
+	item: string?,
+	--- The rest of an action name after `=`, a control's new value, a `drag` move's new 0-based index, or
+	--- `"before"`/`"after"` for a drop.
+	value: any,
 	--- `change`: the control's `name`, when it has one.
 	name: string?,
 	--- `change`: whether the control is now checked.
@@ -236,6 +469,8 @@ export type UiEvent = {
 	--- action/select/activate/change inside an `el` form: its enabled named controls (radio group: the checked
 	--- value, nil when none; lone checkbox: boolean; same-named checkboxes: array of checked values).
 	values: { [string]: any }?,
+	--- Host only: the window key of the window that sent the event, when a daemon knows it.
+	window: string?,
 	--- Event-specific fields.
 	[string]: any,
 }
@@ -282,8 +517,21 @@ export type BlockDef<S> = {
 	--- Handles an event from the view's nodes.
 	event: ((state: S, ev: UiEvent, cx: BlockCx) -> ())?,
 	--- Opts into native editing of the view's editor/input fields: "edit" (a click places the caret, drag/⇧-arrows
-	--- select, edits arrive as `edit` events) and "undo" (⌃Z/⌘Z arrives as an `undo` event, not a key).
-	features: { "edit" | "undo" }?,
+	--- select, edits arrive as `edit` events) and "undo" (⌃Z/⌘Z arrives as an `undo` event, not a key). "send" takes
+	--- the prompts Tern submits for the user, Carly or a plugin (`cx.agents:ask`): each arrives as a `send` event, and
+	--- only for an editor whose `sendable` prop is true.
+	features: { "edit" | "undo" | "send" }?,
+	--- How the surface sits in the pane (the `o` `mode`): "screen" (the default) fills it; "inline" grows down the
+	--- pane like a terminal transcript, `main` scrolling with the pane's scrollback while `dock` stays at its bottom.
+	mode: ("screen" | "inline")?,
+	--- Says the surface is a chat (the `o` `chat`): `main` holds a transcript and `dock` its composer, their nodes
+	--- marked with `chatPart` and `composerPart`. Tern draws it in the user's chat style and treats the pane as an
+	--- agent: it wears the Agent chip, and the Agents widget, `cx.agents` and Carly reach it.
+	chat: boolean?,
+	--- The face of the block's surface (the `o` `font`): "sans" sets people's text (labels, heads, kv, lists, tables)
+	--- in the UI face on 18px lines while machine strings (`mono`/`code`/`num`/`path`/`key` spans) and kinds (code,
+	--- diff, editor, json, …) stay mono; "mono" (the default) keeps the terminal's face throughout.
+	font: ("sans" | "mono")?,
 	--- Called when the pane resizes to `cols` × `rows` cells, then the block renders and saves; without it the block
 	--- still re-renders (no save), with `cx.cols`/`cx.rows` updated.
 	resize: ((state: S, cols: number, rows: number, cx: BlockCx) -> ())?,
@@ -347,9 +595,31 @@ export type SpawnSpec = {
 	--- Working directory (always set; only the daemon expands a leading `~` in a returned one).
 	cwd: string,
 	--- Only the variables the daemon sets for the pane (`TERN_IDENTITY`, `TERN_PANE`, `TERN_PANE_SOCKET`,
-	--- `TERN_WINDOW_KEY`, `TERN_WINDOW_SOCKET`, `TERN_LENSES`, `TERN_COMPLETE`, `TERN_BLOB_DIR`); the pane's base environment is the
+	--- `TERN_WINDOW_KEY`, `TERN_WINDOW_SOCKET`, `TERN_EXE`, `TERN_LENSES`, `TERN_COMPLETE`, `TERN_BLOB_DIR`); the pane's base environment is the
 	--- login environment, not the daemon's (`tern.getenv` here reads the daemon's).
 	env: { [string]: string },
+}
+
+--- Host only: a chat session a pane is about to open again (after a restart, or in a fork), for the `reopen` hook. Tern
+--- runs or types `command`, then the flag (`--resume`, `--restore`, `--fork`) and the session.
+export type ReopenEvent = {
+	--- The pane that ran the chat: the pane a restart starts again, or the pane a fork copies.
+	pane: number,
+	--- Where it opens.
+	cwd: string,
+	--- The pane's shell (`/bin/zsh`), whose command line the result goes into.
+	shell: string,
+	--- `omp`, or `acp` for a `tern acp` chat.
+	agent: "omp" | "acp",
+	--- An omp's session file, or a `tern acp` chat's `<agent>:<session>`.
+	session: string,
+	--- `resume` or `restore` after a restart, `fork` in a fork.
+	how: "resume" | "restore" | "fork",
+	--- What runs before the flag: `omp` typed at a shell's prompt, an agent pane's own command, or `tern acp`; an
+	--- earlier plugin's result.
+	command: string,
+	--- The command line the pane's shell was running (`sandbox -k omp`), when known.
+	line: string?,
 }
 
 --- Native pane kinds; agent and plugin blocks are programs with terminal surfaces.
@@ -434,6 +704,13 @@ export type SurfaceTree = {
 	main: TspNode?, dock: TspNode?, layer: TspNode?,
 	--- Descendants in whole regions omitted after the node budget was exhausted.
 	more: number?,
+}
+
+--- The user's selected text in a block, as copying takes it: a terminal's cells, else
+--- the window selection inside the block (a surface's transcript, a chat, block UI).
+--- kind is the block's BlockRead kind; chars_clipped marks text cut at max_chars.
+export type BlockSelection = {
+	pane: number, kind: string, text: string, chars_clipped: boolean?,
 }
 
 --- Tern's exposed block UI subtree, without ids, bounds or actions.
@@ -609,10 +886,21 @@ export type AgentMessage = {
 	role: "user" | "assistant", text: string, tools: { { [string]: any } },
 }
 
---- Window only: agent conversations; targets are pane ids or session resolve specs.
+--- Window only: an agent block `cx.agents:get` found; it keeps working after the call that got it.
+export type Agent = {
+	--- Pane id.
+	pane: number,
+	--- Sends Carly `message` as a scheduled run when the agent's turn ends (done, failed, exited or
+	--- closed), once, within 12 hours; the task id cancels it (`tern.carly.cancel`).
+	tocarly: (self: Agent, event: "finished", message: string) -> number,
+}
+
+--- Window only: agent conversations; targets are pane ids, session resolve specs or `Agent` handles.
 declare extern type AgentsCx with
 	--- Synchronously lists agent blocks across all sessions, with progress/input state and last assistant text.
 	function list(self): { AgentBlock }
+	--- The agent block a pane id or resolve spec names; errors when none does or the pane runs no agent.
+	function get(self, agent: number | string): Agent
 	--- Synchronously opens an agent; the window retains prompt until its composer reports sendable=true.
 	--- Omitted command/how use agent settings; queued prompts survive a Carly/plugin VM reset.
 	--- cwd "~"/"~/…" expands using the launch host's home. Native omp requires TSP send.
@@ -623,18 +911,18 @@ declare extern type AgentsCx with
 	--- Synchronously queues/submits one prompt; native omp uses one atomic TSP send event.
 	--- Native prompts queue until sendable=true, even if already editable/focused; bootstrap false is not an error.
 	--- Blank/concurrent pending prompts or unsupported native omp error.
-	function ask(self, agent: number | string, text: string): ()
+	function ask(self, agent: number | string | Agent, text: string): ()
 	--- Desktop async: resolves with last assistant text when idle; timeout is ms (default 30000).
 	--- Queued/newly submitted prompts are not idle; delivery errors reject the awaitable.
 	--- Carly uses await(...); plugins use :next(function(message, err, cx) ... end).
-	function wait(self, agent: number | string, opts: { timeout: number? }?): Awaitable<string?>
+	function wait(self, agent: number | string | Agent, opts: { timeout: number? }?): Awaitable<string?>
 	--- Last messages in chronological order (default 50, max 1000); last=0 returns none.
 	--- Reads the omp.session TSP chat, excluding chrome/thinking; non-omp agents return {}.
-	function transcript(self, agent: number | string, opts: { last: number? }?): { AgentMessage }
+	function transcript(self, agent: number | string | Agent, opts: { last: number? }?): { AgentMessage }
 	--- Sends Ctrl-C to interrupt the current turn without closing its block.
-	function interrupt(self, agent: number | string): ()
+	function interrupt(self, agent: number | string | Agent): ()
 	--- Closes the agent block and ends its program, without an interactive confirmation.
-	function stop(self, agent: number | string): ()
+	function stop(self, agent: number | string | Agent): ()
 end
 
 --- A palette action, including unavailable commands and plugin registrations.
@@ -777,9 +1065,11 @@ declare extern type SettingsCx with
 	function keybinds(self): {[string]: string | {string}}
 	--- Binds a shortcut or sequence to an action id or priority-ordered action ids.
 	function bind(self, chord: string, actions: string | {string}): ()
-	--- Leaves this shortcut to the program by writing an empty settings.keybinds override.
-	--- To restore defaults instead, replace keybinds with a table omitting that shortcut.
+	--- Leaves this shortcut to the program by writing an empty settings.keybinds override;
+	--- reset(chord) restores its defaults instead.
 	function unbind(self, chord: string): ()
+	--- Drops this shortcut's override, however spelled, so its default bindings run again.
+	function reset(self, chord: string): ()
 end
 
 --- An opaque VM-local connection id returned by cx.db:open; not a pane id.
@@ -876,6 +1166,11 @@ declare extern type BrowserCx with
 	--- Runs a tern browser op; await in Carly, :next(function(result, err, cx) ... end) in plugins.
 	--- Carly and plugins share the same browser operations; snapshot/state/blocks/events are reads.
 	--- Browser failures resolve with result.error; snapshot never enables Tern's driver/dialog policy.
+	--- {op = "pick", block = id} waits for the user to click an element (Escape cancels):
+	--- ok = {picked = {ref, selector, tag, role, name?, text?, value?, box}, url, title} or
+	--- {cancelled = true, url, title}; act takes picked.ref.
+	--- {op = "open", owner = id, url?, corner?, width?, height?, profile?, show?} answers {block, url};
+	--- show = false opens it parked (never on screen, no focus), live at width x height.
 	function call(self, op: { [string]: any }): Awaitable<BrowserResult>
 end
 
@@ -901,6 +1196,14 @@ export type Corner = "tl" | "tr" | "bl" | "br"
 export type TabColor = "red" | "orange" | "yellow" | "green" | "teal" | "blue" | "purple" | "pink"
 --- Reveal a result (default true); plugins and Carly share the same defaults.
 export type Reveal = { focus: boolean? }
+--- Window only: `cx.layout:float` options. `size = {w, h}` sets its glance size (focusing still grows it): each
+--- value up to 1 is that share of the frame it floats over, above 1 about that many terminal cells (columns wide,
+--- rows tall); the layout clamps it to the frame.
+export type FloatOpts = { focus: boolean?, size: { number }? }
+--- Window only: where `cx:new_block` opens its block. `target`/`dir` split that pane on that side (target default
+--- the focused pane, dir default right; with how beside or default); `ratio` (0 to 1, exclusive) is the block's
+--- share of the split it opens in, set before it shows, so it appears at that width with no resize.
+export type BlockOpts = { focus: boolean?, target: number?, dir: Dir?, ratio: number? }
 --- Window only: a named session and its ordered tabs.
 export type SessionInfo = { id: number, name: string, current: boolean, locked: boolean, tabs: { number } }
 --- A split tree: pane at a leaf; [1] left/top and [2] right/bottom at a split.
@@ -951,7 +1254,7 @@ export type TabInfo = {
 --- Window only: the window being titled, as a table of its state.
 export type WindowInfo = { [string]: any }
 
---- Window only: a segment of the status line.
+--- Window only: a segment of the plugins' status, shown in the widget bar's "Plugin segments" widget.
 export type StatusSegment = {
 	--- Its text.
 	text: string,
@@ -961,6 +1264,110 @@ export type StatusSegment = {
 	tone: string?,
 	--- Action name run on click (`"new_tab"`, `"plugin.<id>.<cmd>"`).
 	command: string?,
+}
+
+--- How a widget draws: its text alone, or a bar, ring or sparkline before it.
+export type WidgetStyle = "text" | "bar" | "ring" | "graph"
+
+--- A widget a plugin offers the widget bar (`tern.chrome.widget`), from either half.
+export type WidgetSpec = {
+	--- Its name in the bar's editor.
+	name: string,
+	--- What it shows, under its name in the editor.
+	description: string?,
+	--- Named icon drawn before it; raises when unknown.
+	icon: string?,
+	--- The styles the user may pick, the first the default; default `{ "text" }`. Raises on an unknown word.
+	styles: { WidgetStyle }?,
+	--- What it shows; nil shows nothing. A pure formatter: 4 ms. In a window half it gets the focused pane (nil
+	--- when no pane is focused) and is cached per input like the other chrome formatters; in the host half it
+	--- gets nil and runs when the widget is registered and at each `tern.chrome.refresh`.
+	render: (pane: StatusPaneInfo?) -> WidgetView?,
+}
+
+--- What a widget's `render` shows. A field of the wrong type fails the render.
+export type WidgetView = {
+	--- Its text (may be empty).
+	text: string,
+	--- Named icon, in place of the declared one.
+	icon: string?,
+	--- Tone (`"accent"`, `"muted"`, `"error"`, …; the widget's `data-tone`).
+	tone: string?,
+	--- Tooltip.
+	title: string?,
+	--- Action name run on click (`"new_tab"`, `"plugin.<id>.<cmd>"`).
+	command: string?,
+	--- How full the `bar` and `ring` styles draw, 0–1 (clamped).
+	value: number?,
+	--- The `graph` style's samples, 0–1 each (clamped), oldest first; the newest 120 are kept.
+	series: { number }?,
+	--- The hover card's rows, in place of `title`'s lines; the first 32 are kept. A row that breaks a bound
+	--- below is left out (and logged) without failing the render; a `card` that isn't a list fails it.
+	card: { WidgetCardRow }?,
+}
+
+--- A row of a widget's hover card.
+export type WidgetCardRow = {
+	--- The row's id (1–64 characters): its buttons' `widget_action` events carry it as `row`. Required with
+	--- `actions`.
+	id: string?,
+	--- Label before the text (≤ 200 characters).
+	label: string?,
+	--- Its text (≤ 200 characters).
+	text: string,
+	--- Link the text opens as a plugin view's `href` span does (⌘-click, PC Ctrl-click): an http(s) URL with a
+	--- host, a `file:` URL, or a `tern-<plugin>:` URL `tern.route.link` handlers claim.
+	href: string?,
+	--- Tone of the text (`"accent"`, `"muted"`, `"ok"`, `"warn"`, `"error"`; the row's `data-tone`).
+	tone: string?,
+	--- Up to 3 small buttons after the text.
+	actions: { WidgetCardButton }?,
+}
+
+--- A button of a widget card's row: a click delivers `widget_action` to the plugin.
+export type WidgetCardButton = {
+	--- The action id (1–64 characters), the event's `act`.
+	id: string,
+	--- Its label (1–64 characters).
+	label: string,
+}
+
+--- A click on a button of a widget's card (`tern.on("widget_action", …)`): in the half that offers the
+--- widget (the window half when both do).
+export type WidgetActionEvent = {
+	--- The widget's id within the plugin.
+	widget: string,
+	--- The row's `id`.
+	row: string,
+	--- The button's `id`.
+	act: string,
+	--- Host only: the key of the window it came from, when known.
+	window: string?,
+}
+
+--- Window only: the Files pane as a `tern.files.button` handler sees it.
+export type FilesInfo = {
+	--- The folder the pane shows, absolute on its host; nil when it shows none.
+	root: string?,
+	--- That folder's host name (`""` without a folder).
+	host: string,
+	--- Absolute paths of the selected rows (a selected folder stands for its selected descendants), else the
+	--- cursor row's; may be empty.
+	selection: { string },
+	--- The tab the pane shows.
+	tab: "files" | "changes" | "refs",
+}
+
+--- Window only: a Files pane header button for `tern.files.button`.
+export type FilesButtonDef = {
+	--- Id within the plugin (`data-id` on the button).
+	id: string,
+	--- Tooltip and accessible name.
+	title: string,
+	--- Named icon (default and unknown: `puzzle`).
+	icon: string?,
+	--- Runs on click.
+	run: (files: FilesInfo, cx: WindowCx) -> (),
 }
 
 --- Window only: a palette command for `tern.command`.
@@ -1007,7 +1414,8 @@ export type LinkRequest = {
 	mods: { cmd: boolean, alt: boolean, shift: boolean, ctrl: boolean },
 }
 
---- Window only: a route's answer, with one of `block`, `url`, `path` or `handled` set; returning nil runs the built-in.
+--- Window only: a route's answer, with one of `block`, `url`, `path` or `handled` set; returning nil runs the built-in, as
+--- does a route that raises or overruns its 50 ms budget (an error toast says so).
 export type RouteDecision = {
 	--- Opens a plugin block of this kind (`"plugin.kind"`) instead, on the file's host (`route.open`) or the clicked
 	--- pane's (`route.link`); when no Ready plugin there defines it, an error toast names the kind and host.
@@ -1020,7 +1428,7 @@ export type RouteDecision = {
 	path: string?,
 	--- Where the rewritten path opens.
 	how: How?,
-	--- True when the plugin handled it; nothing else runs.
+	--- True when the plugin handled it; nothing else runs (`tern open` succeeds without a block for that file).
 	handled: boolean?,
 }
 
@@ -1098,6 +1506,21 @@ export type PaneExitedEvent = {
 	status: number,
 }
 
+--- `process_exit` payload: a `tern.process.run` or `tern.process.spawn` child ended after the VM that started it was
+--- gone (a reload, or a daemon upgrade in place), so its callbacks went with that VM.
+export type ProcessExitEvent = {
+	--- Its process id.
+	pid: number,
+	--- Exit code; -1 when killed (timeout) or ended by a signal.
+	status: number,
+	--- The last 64 KiB of its stdout.
+	stdout: string,
+	--- The last 64 KiB of its stderr.
+	stderr: string,
+	--- True when `timeout_ms` elapsed and the process was killed.
+	timed_out: boolean,
+}
+
 --- Window only: `focus` payload: the focused pane changed.
 export type FocusEvent = {
 	--- Focused pane id.
@@ -1106,7 +1529,65 @@ export type FocusEvent = {
 	tab: number,
 }
 
---- Window only: `pane_created` / `pane_closed` payload.
+--- Window only: `agent_finished` payload: an agent's turn ended, or the agent did. A turn that ends while a
+--- prompt waits for the agent is not reported.
+export type AgentFinishedEvent = {
+	--- Pane id.
+	pane: number,
+	--- "done" or "failed" as it reported, "exited" when its program exited, "closed" when its block closed.
+	result: "done" | "failed" | "exited" | "closed",
+}
+
+--- Window only: `agent_state` payload: an agent's state, as `cx.agents:list()` gives it, changed.
+export type AgentStateEvent = {
+	--- Pane id.
+	pane: number,
+	--- Its state at the last look; nil for an agent new since.
+	old: ("working" | "waiting_input" | "idle" | "exited")?,
+	--- Its state now.
+	new: "working" | "waiting_input" | "idle" | "exited",
+}
+
+--- Window only: `float_moved` payload: a drag or throw let a floating block go. Keyboard moves and plugin calls
+--- don't fire it.
+export type FloatMovedEvent = {
+	--- The floating block.
+	pane: number,
+	--- Its tab id.
+	tab: number,
+	--- The block it floats over, or docked beside.
+	over: number,
+	--- The corner of `over` it snapped to; nil when it docked.
+	corner: Corner?,
+	--- The edge it slid off, leaving an edge tab (it keeps `corner` to come back to).
+	stashed: ("left" | "right")?,
+	--- Docked into the split tree on that side of `over`: it no longer floats.
+	docked: Dir?,
+}
+
+--- Window only: `session_ended` payload: a session went away (closed here or elsewhere, `tern kill session`, or
+--- an `--end-on-success` block that exited 0). A shown one's window already shows the session it showed before.
+export type SessionEndedEvent = {
+	--- Session id, as `cx.session:sessions()` gave it.
+	session: number,
+	--- Its name.
+	name: string,
+	--- This window showed it when it ended.
+	shown: boolean,
+}
+
+--- Window only: `budget` payload: one of this plugin's own hooks paused for running over its budget, or resumed.
+export type BudgetEvent = {
+	--- The hook: "timer", "command <id>", "status", an event name, ….
+	hook: string,
+	state: "paused" | "resumed",
+	--- The budget it ran over, in ms ("paused" only).
+	ms: number?,
+	--- How long it is paused, in ms ("paused" only).
+	paused_ms: number?,
+}
+
+--- Window only: `pane_created` / `pane_closed` payload; both fire for every pane kind.
 export type PaneEvent = {
 	--- Pane id.
 	pane: number,
@@ -1131,11 +1612,26 @@ end
 declare extern type EffectCx with
 	--- Shows a toast; `sub` is a secondary line.
 	function toast(self, level: ToastLevel, text: string, sub: string?): ()
-	--- Opens a file path or URL through the window's `route.link`, then `route.open` with origin `link`.
-	function open(self, target: string): ()
+	--- Opens a file path or URL through the window's `route.link`, then `route.open` with origin `link`. While
+	--- handling a block or lens event (or key), it acts in the window that sent it; `window` names a window key
+	--- whose windows act instead.
+	function open(self, target: string, opts: { window: string? }?): ()
 	--- Copies `text` to the clipboard.
 	function copy(self, text: string): ()
 end
+
+--- What a block says it is doing (`cx:status`), as a program does with OSC 7501.
+export type BlockState = "idle" | "working" | "blocked" | "done" | "error"
+
+--- Details of `cx:status`.
+export type BlockStatus = {
+	--- A line saying what or why (at most 2048 bytes).
+	msg: string?,
+	--- What a `blocked` block waits on.
+	kind: ("permission" | "question" | "auth")?,
+	--- How far a `working` or `blocked` block got, 0–100; without it progress is indeterminate.
+	progress: number?,
+}
 
 --- Host only: the `cx` of a plugin block.
 declare extern type BlockCx extends EffectCx with
@@ -1157,6 +1653,23 @@ declare extern type BlockCx extends EffectCx with
 	function frame(self, ops: { any }): ()
 	--- Stores `bytes` of type `mime` (`"image/png"`); returns the blob id for an `image` node's `blob` prop.
 	function blob(self, bytes: string, mime: string): string
+	--- Says what the block is doing, as a program does with OSC 7501: its tab, the inbox and the Agents widget show
+	--- it, and a `working` or `blocked` block asks before its pane closes. nil clears it. Bad states, kinds and a
+	--- `msg` over its limit raise.
+	function status(self, state: BlockState?, opts: BlockStatus?): ()
+end
+
+--- A running child of `tern.process.spawn`.
+declare extern type Child with
+	--- Its process id.
+	pid: number
+	--- Queues `data` for the child's stdin; raises once stdin was closed or the child ended.
+	function write(self, data: string): ()
+	--- Closes the child's stdin after what `write` queued: the child reads the end of its input.
+	function close_stdin(self): ()
+	--- Ends the child: "terminate" (the default) asks it to (SIGTERM), "interrupt" is ⌃C (SIGINT) and "kill" cannot
+	--- be refused (SIGKILL). On Windows each ends the process at once. No effect once it ended.
+	function kill(self, signal: ("terminate" | "interrupt" | "kill")?): ()
 end
 
 --- A persistent window-authored canvas; view and md are mutually exclusive.
@@ -1175,6 +1688,13 @@ export type CanvasSpec = {
 	how: How?,
 	--- Focuses the new pane by default; false preserves shown focus.
 	focus: boolean?,
+	--- Pane to split (default the focused pane when dir is given); needs how beside or default.
+	target: number?,
+	--- Side of target the canvas takes (default right when target is given).
+	dir: Dir?,
+	--- The canvas's share (0 to 1, exclusive) of the split it opens in, set before it shows: a sidebar opens
+	--- straight at its saved width. Kept above the minimum pane size; ignored when it opens in a tab of its own.
+	ratio: number?,
 }
 
 --- An owner-only canvas update; paths refer to keys within the supplied view.
@@ -1229,6 +1749,19 @@ export type CanvasAction = {
 	mods: { string }?,
 	--- Creating owner.
 	owner: string,
+}
+
+--- Window only: `canvas_resized` payload: the user let go of a split they dragged (or reset) in a canvas this plugin
+--- owns. The canvas already keeps `sizes` as that split's `sizes`.
+export type CanvasResized = {
+	--- Canvas pane.
+	pane: number,
+	--- Creating owner.
+	owner: string,
+	--- The split's node id, as a click reports it (`main.regions`).
+	node: string,
+	--- One share per pane, as drawn, summing to 1.
+	sizes: { number },
 }
 
 --- A native or Ready plugin block available on the current host.
@@ -1288,7 +1821,15 @@ declare extern type CanvasCx with
 	function get(self, pane: number): CanvasInfo?
 	--- Lists canvas metadata without view or dock.
 	function list(self): { CanvasInfo }
+	--- Scrolls a canvas's pane to the Markdown heading `target` names, by its text or a link's fragment
+	--- (GitHub's anchors: `notes-1` is the second `Notes`); `false` and why when it draws no such heading.
+	--- Exactly one field; a pane that is no canvas raises.
+	function reveal(self, pane: number, target: CanvasReveal): (boolean, string?)
 end
+
+--- What `cx.canvas:reveal` scrolls to: a heading by its `heading` text (`"Setup guide"`), or by a link's
+--- `anchor` (`"setup-guide"`, `"#setup-guide"`).
+export type CanvasReveal = { heading: string?, anchor: string? }
 
 --- A whiteboard page area in page units (one view px at 100%).
 export type WhiteboardArea = { x: number, y: number, w: number, h: number }
@@ -1434,6 +1975,9 @@ declare extern type SessionCx with
 	function pane(self, pane: number | string): PaneInfo?
 	--- What a pane shows, by kind; surfaces included. No focus or browser eval.
 	function read(self, pane: number | string, opts: ReadOpts?): (BlockRead | string)?
+	--- The selected text in pane (nil: the focused pane's, else any block's); nil when none.
+	--- max_chars defaults to 8000, maximum 64000. File selections are in read's selection.
+	function selection(self, pane: (number | string)?, opts: { max_chars: number? }?): BlockSelection?
 	--- A capped TSP tree for the live surface or newest retained surface.
 	function surface(self, pane: number | string, opts: SurfaceOpts?): (SurfaceTree | string)?
 	--- Tern's block UI accessibility subtree; nil when hidden or not mounted.
@@ -1477,7 +2021,7 @@ declare extern type LayoutCx with
 	--- Moves pane to a new last tab (default its own session), returning the tab.
 	function move_to_new_tab(self, pane: number, session: number?, reveal: Reveal?): (number?, string?)
 	--- Floats pane over a leaf; defaults to its old-area owner and nearest corner.
-	function float(self, pane: number, over: number?, corner: Corner?, reveal: Reveal?): (boolean, string?)
+	function float(self, pane: number, over: number?, corner: Corner?, opts: FloatOpts?): (boolean, string?)
 	--- Docks a floating block; defaults to its original split, else beside its owner.
 	function dock(self, pane: number, target: number?, dir: Dir?, reveal: Reveal?): (boolean, string?)
 	--- Parks pane in its session's deck, its program still running; its split collapses, or its tab
@@ -1593,7 +2137,7 @@ declare extern type WindowCx with
 	function open(self, target: string, how: How?, reveal: Reveal?): ()
 	--- Opens a plugin block of `kind` (`"plugin.kind"`) on the window's current host; returns its pane (nil, with no
 	--- toast, when no Ready plugin there defines it).
-	function new_block(self, kind: string, args: { string }?, how: How?, reveal: Reveal?): number?
+	function new_block(self, kind: string, args: { string }?, how: How?, opts: BlockOpts?): number?
 	--- Runs a built-in command by id (`"new_tab"`; built-in ids only, else ``unknown command `<id>` ``); overrides don't re-run.
 	function command(self, id: string): ()
 	--- Runs any action name, including plugin.<id>.<command> and keymap/view actions.
@@ -1601,11 +2145,59 @@ declare extern type WindowCx with
 	function action(self, name: string): ()
 	--- Opens Carly and asks a shown question from a plugin callback.
 	function ask_carly(self, text: string): ()
+	--- Asks the user to choose one of `opts.items` in a picker over the focused pane; resolves with
+	--- the chosen item (the table passed in), nil when the user dismissed the picker.
+	function pick(self, opts: PickOptions): Awaitable<PickItem?>
+	--- Asks the user to type a line in a field over the focused pane; resolves with the text,
+	--- nil when the user dismissed it.
+	function prompt(self, opts: PromptOptions?): Awaitable<string?>
 	--- Shows a toast; `sub` is a secondary line.
 	function toast(self, level: ToastLevel, text: string, sub: string?): ()
 	--- Copies `text` to the clipboard.
 	function copy(self, text: string): ()
+	--- This window's key, as `tern … --window KEY` takes it and `tern inspect` lists it (`""` for the first
+	--- window). Processes `tern.process.run` starts in the window context get it as `TERN_WINDOW_KEY`.
+	function window_key(self): string
 end
+
+--- Window only: one choice of `cx:pick`. Other fields ride along to the answer.
+export type PickItem = {
+	--- What the row says; typing filters on it.
+	label: string,
+	--- Dim text after the label.
+	detail: string?,
+	--- Heading over a run of consecutive items with the same group.
+	group: string?,
+	--- A Tern icon name (default: the picker's icon).
+	icon: string?,
+	--- Shows a check: the current choice.
+	current: boolean?,
+	[string]: any,
+}
+
+--- Window only: what `cx:pick` asks.
+export type PickOptions = {
+	--- The choices, listed in this order; at least one.
+	items: { PickItem },
+	--- The empty field's hint, also the picker's accessible name.
+	placeholder: string?,
+	--- The field's Tern icon name (default `puzzle`).
+	icon: string?,
+	--- What ↵ does, in the key legend (default `select`).
+	action: string?,
+}
+
+--- Window only: what `cx:prompt` asks.
+export type PromptOptions = {
+	--- The text the field starts with, selected.
+	value: string?,
+	--- The empty field's hint, also the field's accessible name.
+	placeholder: string?,
+	--- The field's Tern icon name (default `puzzle`).
+	icon: string?,
+	--- What ↵ does, in the key legend (default `confirm`).
+	action: string?,
+}
 
 --- Desktop window only: durable Carly task. Exactly one of when/on is required.
 export type TaskSpec = {
@@ -1616,7 +2208,7 @@ export type TaskSpec = {
 	--- Intervals >= 5 minutes for model turns; >= 1 minute for promptless checks.
 	when: string?,
 	--- Window event: command_finished, command_started, pane_closed, pane_created,
-	--- tab_created, tab_closed, title, cwd or focus. Needs a check or pane.
+	--- tab_created, tab_closed, title, cwd, focus or agent_finished. Needs a check or pane.
 	on: string?,
 	--- Luau source returning function(ev, cx, state), never a saved closure.
 	--- nil is quiet; false ends the task; string/table escalates with prompt.
@@ -1736,6 +2328,9 @@ declare tern: {
 		decode: (text: string) -> string,
 	},
 
+	--- SHA-256 of `data`'s bytes as 64 lowercase hex digits.
+	sha256: (data: string) -> string,
+
 	--- Monotonic milliseconds (fractional).
 	now: () -> number,
 
@@ -1774,6 +2369,8 @@ declare tern: {
 		--- Reads raw bytes (no UTF-8 check). With max_bytes, requires a regular
 		--- non-symlink file and rejects oversize input before allocating/reading it.
 		--- Raced growth is bounded too; nonregular targets never block on open.
+		--- Without max_bytes a FIFO or a stalled mount blocks until data comes, the window
+		--- half's UI thread included; no budget interrupts it.
 		read: (path: string, max_bytes: number?) -> string,
 		--- Writes `text` to a file, replacing it.
 		write: (path: string, text: string) -> (),
@@ -1790,9 +2387,19 @@ declare tern: {
 	--- Child processes on this context's machine.
 	process: {
 		--- Runs `argv`; without `cb` returns an awaitable, otherwise calls `cb` (window: plus a fresh `cx`); spawn failures raise. Raises on iOS.
+		--- The process starts on the calling thread (the UI thread in the window half) before this returns. A child
+		--- still running when its VM goes (a reload, a daemon upgrade in place) runs on; its end comes as a
+		--- `process_exit` event in the plugin's new VM instead of `cb`.
 		run: ((argv: { string }, opts: ProcessOptions?, cb: (result: ProcessResult, cx: WindowCx?) -> ()) -> ())
 			& ((argv: { string }, cb: (result: ProcessResult, cx: WindowCx?) -> ()) -> ())
 			& ((argv: { string }, opts: ProcessOptions?) -> Awaitable<ProcessResult>),
+		--- Starts `argv` and returns its handle at once; its output streams to `opts.stdout` and `opts.stderr` and its
+		--- end to `opts.exit`, each on the VM's thread. Spawn failures raise. Raises on iOS and in Carly's VM.
+		--- At most 16 MiB of output wait for the callbacks; past that the child's writes block until they catch up.
+		--- A child still running when its VM goes (a reload, a daemon upgrade in place) has its stdin closed and runs
+		--- on; its end comes as a `process_exit` event in the plugin's new VM. Stop the children you supervise in
+		--- `unload`.
+		spawn: (argv: { string }, opts: SpawnOptions?) -> Child,
 	},
 
 	--- Sends an HTTP(S) request; without `cb` returns an awaitable, otherwise calls `cb` with the whole response
@@ -1817,18 +2424,22 @@ declare tern: {
 		lines: (children: { Node }) -> Node,
 		--- A horizontal row, small gaps between children.
 		row: (children: { Node }) -> Node,
-		--- A card headed by `head`.
-		card: (head: Spans, children: { Node }) -> Node,
+		--- A card headed by `head`; `props` adds `icon`, `meta`, `end` and common props.
+		card: (head: Spans, children: { Node }, props: CardProps?) -> Node,
 		--- A lighter disclosure group headed by `head`.
 		section: (head: Spans, children: { Node }) -> Node,
 		--- A divider, labeled when `label` isn't empty.
 		rule: (label: Spans) -> Node,
 		--- A pill chip of `t` in `tone`.
 		badge: (t: string, tone: string) -> Node,
+		--- A push button labeled `text` (nil or `""` with an `icon`: icon-only).
+		button: (text: string?, props: ButtonProps?) -> Node,
+		--- A well of stat tiles side by side, wrapping when narrow.
+		stats: (items: { StatItem }) -> Node,
 		--- An aligned key/value list of `{keySpans, valueSpans}` pairs.
 		kv: (items: { { Spans } }) -> Node,
-		--- A table; `rows[i][j]` is the cell of `cols[j]`.
-		table: (cols: { Col }, rows: { { Cell } }) -> Node,
+		--- A table; `rows[i][j]` is the cell of `cols[j]` (row id `r<i-1>`), or a `TableRow` with its own id.
+		table: (cols: { Col }, rows: { { Cell } | TableRow }, opts: TableOpts?) -> Node,
 		--- A meter cell at `value` (0–1), tinted warn/bad at or above `thresholds` `{warn, bad}`.
 		meter_cell: (value: number, thresholds: { number }?) -> MeterCell,
 		--- A meter cell stacking `{value, themeToken}` parts from the left.
@@ -1841,8 +2452,8 @@ declare tern: {
 		code: (text: string, lang: string?, start: number?) -> Node,
 		--- A unified diff; `path` picks the grammar.
 		diff: (text: string, path: string?) -> Node,
-		--- Markdown.
-		md: (text: string) -> Node,
+		--- Markdown; `opts` shape its code blocks' Run and heads.
+		md: (text: string, opts: MdOpts?) -> Node,
 		--- A meter at `value` (0–1) labeled `label`.
 		meter: (value: number, label: Spans) -> Node,
 		--- A progress bar at `value` (0–1), indeterminate when nil.
@@ -1859,7 +2470,8 @@ declare tern: {
 		test_summary: (passed: number, failed: number, skipped: number, took: string?) -> Node,
 		--- A muted "… N more (Raw shows everything)" line.
 		overflow: (hidden: number) -> Node,
-		--- Any TSP node: `{k = kind, p = props, c = children}`.
+		--- Any TSP node: `{k = kind, p = props, c = children}`: a `tabs` strip takes `variant: TabsVariant`, an
+		--- `overlay` takes `OverlayProps`.
 		node: (kind: string, props: { [string]: any }?, children: { Node }?) -> Node,
 		--- A generic HTML-subset element `tag` (`div`, `form`, `label`, `button`, `input`, …); props: `class`,
 		--- `attrs` (`data-*`, `aria-*`, `role`, `colspan`, `rowspan`), `text`, common props; `input` takes `type`
@@ -1902,11 +2514,19 @@ declare tern: {
 	},
 
 	--- Subscribes `fn` to lifecycle event `name`; annotate its parameters with the payload types.
-	--- Host: `spawn(spec: SpawnSpec) -> SpawnSpec?` (sync filter) and `(ev, cx: EffectCx)` for `command_started`,
-	--- `command_finished`, `cwd`, `title`, `pane_exited`. Window: `window_start(cx: WindowCx)` and `(ev, cx: WindowCx)`
+	--- Both: `unload(cx)` before a reload replaces the plugin or it is turned off (stop the processes it supervises),
+	--- and `process_exit(ev: ProcessExitEvent, cx)`.
+	--- Host: `spawn(spec: SpawnSpec) -> SpawnSpec?` and `reopen(ev: ReopenEvent) -> string?` (sync filters; a string
+	--- replaces `ev.command`) and `(ev, cx: EffectCx)` for `command_started`,
+	--- `command_finished`, `cwd`, `title`, `pane_exited`, `widget_action` (WidgetActionEvent).
+	--- Window: `window_start(cx: WindowCx)` and `(ev, cx: WindowCx)`
 	--- for `focus`, `pane_created`, `pane_closed`, `tab_created`, `tab_closed`, `command_started`, `command_finished`, `cwd`,
-	--- `title` and `canvas_action(ev: CanvasAction, cx) -> boolean?` (truthy consumes the owner's click).
-	--- `window_start` runs once per plugin per window. The `spawn` wait (50 ms) counts from when the request is queued.
+	--- `title`, `agent_finished`, `agent_state` (AgentStateEvent), `float_moved` (FloatMovedEvent), `session_ended`
+	--- (SessionEndedEvent), `budget` (BudgetEvent), `canvas_action(ev: CanvasAction, cx) -> boolean?` (truthy
+	--- consumes the owner's click), `canvas_resized` (CanvasResized; every owner handler runs) and
+	--- `widget_action(ev: WidgetActionEvent, cx) -> boolean?` (truthy takes the click; none toasts).
+	--- `window_start` runs once per plugin per window. The `spawn` and `reopen` waits (50 ms) count from when the
+	--- request is queued.
 	on: (name: string, fn: (...any) -> ...any) -> (),
 
 	--- Window only: adds a palette command, also bindable as action `plugin.<plugin>.<id>`.
@@ -1928,19 +2548,44 @@ declare tern: {
 		link: (fn: (link: LinkRequest, cx: WindowCx) -> RouteDecision?) -> (),
 	},
 
-	--- Window only: pure formatters for window chrome, cached per input (cleared on reload, a registration or
-	--- `refresh`). The chrome redraws on session changes and pane output; `refresh` redraws it for anything else.
+	--- Pure formatters for window chrome. In the window half they are cached per input (cleared on reload, a
+	--- registration or `refresh`), and the chrome redraws on session changes and pane output; `refresh` redraws it
+	--- for anything else. The host half has `widget` and `refresh` alone: its widgets render on the host.
 	chrome: {
 		--- Window only: a tab's title; nil keeps the default.
 		tab_title: (fn: (tab: TabInfo) -> string?) -> (),
 		--- Window only: the window's title; nil keeps the default.
 		window_title: (fn: (win: WindowInfo) -> string?) -> (),
-		--- Window only: status line segments for the focused pane; nil adds none.
+		--- Window only: segments for the focused pane, shown in the widget bar's "Plugin segments" widget; nil
+		--- adds none.
 		status: (fn: (pane: StatusPaneInfo) -> { StatusSegment }?) -> (),
-		--- Window only: drops this window's cached formatter results and redraws its tabs, status line and title on
+		--- Offers widget `id` (`^[a-z][a-z0-9-]{0,31}$`) to the widget bar, where the user places it (palette › Edit
+		--- widgets…) as `<plugin>/<id>`. Registering an id again replaces it in place; nil takes it away. Raises on a
+		--- bad id, a missing name or render, an unknown icon or style. In the host half, `render` runs on the host
+		--- (the session daemon) with no pane, when the widget is registered and at each `tern.chrome.refresh`; what
+		--- it returns reaches every window attached to that host, on this machine or another, so a widget can show
+		--- state only the host has. A window half's widget of the same id wins in its window; with several hosts
+		--- offering it, the focused pane's host's shows.
+		widget: (id: string, spec: WidgetSpec?) -> (),
+		--- Window only: the icon tabs, pane rows and parked cards show for `program`: a program key (`codex`, `vim`,
+		--- `shell`; the icons' `data-program`) or a command name (`nvim`, `npm`; `TabInfo.program`). `icon` is a Tern
+		--- icon name (`provider-openai`, `provider:openai`, `sparkle`); nil takes this plugin's choice back. Wins over
+		--- the `program_icons` setting; the first plugin in id order wins a program. Raises on an unknown icon.
+		program_icon: (program: string, icon: string?) -> (),
+		--- In a window half, drops this window's cached formatter results and redraws its tabs, widgets and title on
 		--- the next frame, so answers that depend on more than their input (a clock, a file, a process result) show.
-		--- Call it from a timer, event or command, not from a formatter (that raises an error).
+		--- In the host half, renders this plugin's host widgets again once the current call returns and sends every
+		--- attached window those that changed. Call it from a timer, event, process or fetch callback or command,
+		--- not from a formatter or `render` (that raises an error).
 		refresh: () -> (),
+	},
+
+	--- Window only: the Files pane.
+	files: {
+		--- Window only: adds a button to the Files pane's header, before More (`.ft-plugin[data-plugin][data-id]`);
+		--- a click runs `run` with the pane's folder and selection (hook `files button <id>`, 50 ms). Registering an
+		--- `id` again replaces that button in place. Raises ``tern.files.button: bad id `<id>` ``.
+		button: (def: FilesButtonDef) -> (),
 	},
 
 	--- Window only: installs global CSS as sheet `plugin:local:<id>:<name>`, replacing an earlier one of that name.
