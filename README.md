@@ -15,22 +15,44 @@
 
 先安装 Tern，并确认终端可以运行 `tern`。普通使用不需要 Luau、`luau-lsp` 或生成类型定义。
 
-下载本仓库并进入目录：
+可以直接执行仓库提供的一键安装脚本。脚本会临时 clone 仓库，并安装所有包含 `plugin.toml` 的插件：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/OiAnthony/tern-workspace/main/install.sh | sh
+```
+
+需要替换已安装副本时追加 `--force`：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/OiAnthony/tern-workspace/main/install.sh | sh -s -- --force
+```
+
+脚本默认安装 `main` 分支，也可以固定到某个分支或 tag：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/OiAnthony/tern-workspace/main/install.sh | sh -s -- --ref v1.0.0
+```
+
+一键脚本会执行从仓库下载的安装代码。对代码来源有审核要求时，先下载并查看脚本，再执行：
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/OiAnthony/tern-workspace/main/install.sh
+less install.sh
+sh install.sh
+```
+
+也可以下载本仓库后执行本地批量安装脚本：
 
 ```sh
 git clone https://github.com/OiAnthony/tern-workspace.git
 cd tern-workspace
-```
-
-按需安装单个插件，或执行仓库提供的批量安装脚本：
-
-```sh
 ./install-all.sh
 ```
 
-脚本会安装 `plugins/` 下所有包含 `plugin.toml` 的插件。需要更新已安装副本时追加 `--force`：
+更新本地 checkout 中的所有插件：
 
 ```sh
+git pull --ff-only
 ./install-all.sh --force
 ```
 
