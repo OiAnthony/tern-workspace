@@ -27,6 +27,14 @@ curl -fsSL https://raw.githubusercontent.com/OiAnthony/tern-workspace/main/insta
 curl -fsSL https://raw.githubusercontent.com/OiAnthony/tern-workspace/main/install.sh | sh -s -- --force
 ```
 
+仓库移除插件或更换插件 ID 后，追加 `--prune` 清理当前 Tern 插件目录中不再属于仓库的插件：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/OiAnthony/tern-workspace/main/install.sh | sh -s -- --force --prune
+```
+
+`--prune` 只会删除本脚本此前成功安装并登记、但后来不在仓库清单中的插件。它会在 Tern 配置目录旁保存 `.tern-workspace-managed` 清单，因此同一配置中的其他来源插件会保留。首次启用此功能时，脚本无法判断历史上由谁安装了已有插件，旧残留需要手动执行 `tern plugin remove <id>` 一次。
+
 脚本默认安装 `main` 分支，也可以固定到某个分支或 tag：
 
 ```sh
