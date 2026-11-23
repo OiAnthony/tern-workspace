@@ -4,7 +4,6 @@ local logic = require("./lib/logic")
 
 local POLL_MS = 250
 local active_timer: TimerHandle? = nil
-local lifecycle = logic.new_lifecycle_state()
 
 type StoredRecord = logic.Record
 
@@ -61,57 +60,7 @@ local function main_pane(cx: WindowCx, session_id: number): number?
 	return first_leaf(layout.root)
 end
 
-local function snapshot(
-	cx: WindowCx
-): ({ logic.SessionSnapshot }, { logic.TabSnapshot }, { logic.PaneSnapshot })
-	local sessions: { logic.SessionSnapshot } = {}
-	for _, s in cx.sessions:list() do
-		table.insert(sessions, {
-			id = s.id,
-			host = s.host,
-			locked = s.locked,
-			tabs = s.tabs,
-		})
-	end
-
-	local tabs: { logic.TabSnapshot } = {}
-	for _, t in cx.session:tabs() do
-		table.insert(tabs, {
-			id = t.id,
-			session = t.session,
-		})
-	end
-
-	local panes: { logic.PaneSnapshot } = {}
-	for _, p in cx.session:panes() do
-		table.insert(panes, {
-			pane = p.pane,
-			tab = p.tab,
-			parked = p.parked,
-		})
-	end
-
-	return sessions, tabs, panes
-end
-
-local function observe_sessions(cx: WindowCx): ({ logic.SessionSnapshot }, { logic.PaneSnapshot })
-	local sessions, tabs, panes = snapshot(cx)
-	logic.observe_layout(lifecycle, sessions, tabs, panes)
-	return sessions, panes
-end
-
-local function close_emptied_sessions(cx: WindowCx)
-	local sessions, panes = observe_sessions(cx)
-	local ids = logic.sessions_to_close(lifecycle, sessions, panes)
-	for _, session_id in ids do
-		logic.forget_session(lifecycle, session_id)
-		pcall(function()
-			cx.sessions:close(session_id)
-		end)
-	end
-end
-
-local function sync_name(cx: WindowCx)
+local function sync(cx: WindowCx)
 	local session = cx.sessions:current()
 	local pane_id = main_pane(cx, session.id)
 	if pane_id == nil then
@@ -146,11 +95,6 @@ local function sync_name(cx: WindowCx)
 	end
 end
 
-local function sync(cx: WindowCx)
-	close_emptied_sessions(cx)
-	sync_name(cx)
-end
-
 local function schedule(delay_ms: number?)
 	if active_timer ~= nil then
 		return
@@ -169,23 +113,11 @@ tern.on("window_start", function(cx)
 	schedule()
 end)
 
-for _, event_name in { "pane_closed", "tab_closed" } do
-	tern.on(event_name, function(_, cx)
-		close_emptied_sessions(cx)
-		sync_name(cx)
-	end)
-end
-
-tern.on("session_ended", function(ev: SessionEndedEvent, cx)
-	logic.forget_session(lifecycle, ev.session)
-	sync(cx)
-end)
-
-for _, event_name in { "focus", "pane_created", "tab_created", "cwd" } do
+for _, event_name in { "focus", "pane_created", "pane_closed", "tab_created", "tab_closed", "cwd" } do
 	tern.on(event_name, function(_, cx)
 		sync(cx)
 	end)
 end
 
--- Seed lifecycle tracking and restart polling immediately after plugin load or reload.
+-- Restart polling immediately after plugin load or reload.
 schedule(1)

@@ -2,5 +2,5 @@ schema = 1
 id = "auto-session"
 name = "Auto Session"
 version = "0.1.0"
-description = "Auto-name Sessions after their main pane directory and automatically close Sessions when they become empty."
+description = "Auto-name Sessions after their main pane directory, locking the name once manually renamed."
 window = "window.luau"
