@@ -21,7 +21,19 @@ git clone https://github.com/OiAnthony/tern-workspace.git
 cd tern-workspace
 ```
 
-按需执行下面的安装命令，每行安装一个插件：
+按需安装单个插件，或执行仓库提供的批量安装脚本：
+
+```sh
+./install-all.sh
+```
+
+脚本会安装 `plugins/` 下所有包含 `plugin.toml` 的插件。需要更新已安装副本时追加 `--force`：
+
+```sh
+./install-all.sh --force
+```
+
+也可以按需执行单个插件的安装命令，每行安装一个插件：
 
 ```sh
 tern plugin install ./plugins/pane-title
@@ -29,6 +41,7 @@ tern plugin install ./plugins/shortcut-manager
 tern plugin install ./plugins/git-open
 ```
 
+Tern 的 `install` 接收一个插件包目录。仓库根目录不是插件包，因此直接安装仓库 URL 会因为缺少根目录 `plugin.toml` 而失败。
 安装会将插件复制到 Tern 的插件目录。执行后检查加载状态：
 
 ```sh
