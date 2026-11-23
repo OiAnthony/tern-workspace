@@ -98,6 +98,7 @@ There is currently no documented build command, package-manager command, lint wr
 
 ## Code Conventions & Common Patterns
 
+- **First-principles native check before building**: Before creating a new plugin or implementing a new capability, inspect the installed Tern version's native settings (`cx.settings:list()` / `cx.settings:describe()`), built-in actions (`cx.actions:list()`), and CLI (`tern help`). If Tern already supports the behavior natively via settings, keybinds, or built-in actions, recommend the native configuration instead of creating or re-implementing it in a plugin. Only build what Tern genuinely lacks—or clearly call out any remaining gap first.
 - Start Luau entry files with `--!strict`.
 - Keep `plugin.toml` as the source of plugin identity and entry-point declarations.
 - Do not hand-edit generated `tern.d.luau`; regenerate it with `tern plugin types` after Tern upgrades.

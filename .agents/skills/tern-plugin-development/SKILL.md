@@ -16,6 +16,11 @@ description: 用于本工作区的 Tern 插件开发、Plugin API 更新调查�
 
 ## 开发步骤
 
+0. **第一性原理与原生能力排查（开发前门禁）**：
+   - 在新建插件或新增功能前，先确认目标需求是否已被当前版本 Tern 原生支持（不要凭记忆判断，Tern 版本迭代较快）。
+   - 用本机 `tern --version`、隔离 runtime 探针查询 `cx.settings:list()` / `cx.settings:describe(key)` / `cx.actions:list()`，并核对 `tern help` 与官方文档。
+   - **如果 Tern 原生设置、内置动作或快捷键已满足需求**：直接给出原生配置路径或命令，**不新建插件，也不在插件中重复实现**。
+   - **如果原生只覆盖部分能力**：先指出重叠部分，只针对真实缺口设计最小实现；能复用原生设置（例如 `cx.settings:get(...)`）时不另造重复开关。
 1. 确认需求属于哪一侧：
    - Host：block、command lens、host hook、spawn filter、pane 写入。
    - Window：command、bind、override、route、chrome、Files 按钮、layout、canvas、agent 事件。
